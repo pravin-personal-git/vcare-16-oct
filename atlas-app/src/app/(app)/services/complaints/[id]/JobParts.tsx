@@ -1,0 +1,209 @@
+'use client';
+
+import { ProductLink } from '@/components/document/ProductLink';
+import Link from 'next/link';
+import { useRouter } from 'next/navigation';
+import { useState, useTransition } from 'react';
+import { Badge, Field, type BadgeTone } from '@/components/ui/Layout';
+import { Button } from '@/components/ui/Button';
+import { Modal } from '@/components/ui/Modal';
+import { ProductFinder, type FindableProduct } from '@/components/document/ProductFinder';
+import {
+  logFaultyPartAction, raiseJobChallanAction, receiveFaultyPartAction, returnUnusedPartsAction,
+} from '../../actions';
+import { GdnFix, IssueParts, ReceiveBack, ReceiveWithSerial } from '@/components/services/GdnFix';
+
+/**
+ * Parts on a job (workflow slice 4, spec §4.4): job challans with their
+ * approval status and GDN numbers, raising one from the office, the store's
+ * Issue, unused parts coming back, and the faulty part taken out. Internal -
+ * none of this reaches the customer.
+ */
+export interface ChallanVM {
+  id: string; challanNo: string; type: string; status: string; note: string | null; createdAt: string;
+  createdByName: string | null; rejectionReason: string | null; gdnNos: string[]; cancelledGdnNos?: string[];
+  lines: { id: string; productId?: string; productName: string; productCode: string; qty: number; qtyIssued: number; qtyReturned: number; qtyReturnPending: number; serial?: boolean; units?: { id: string; serialNo: string }[] }[];
+}
+export interface FaultyVM {
+  id: string; description: string; serialNo: string | null; productName: string | null; loggedAt: string; receivedAt: string | null;
+  /** The Replacements case a received old unit went into (28 Sep 2026). */
+  caseNo?: string | null;
+  caseId?: string | null;
+}
+
+const STATUS: Record<string, { label: string; tone: BadgeTone }> = {
+  pending_approval: { label: 'Waiting for approval', tone: 'warning' },
+  approved: { label: 'Approved - to issue', tone: 'info' },
+  rejected: { label: 'Rejected', tone: 'danger' },
+  issued: { label: 'Issued', tone: 'success' },
+};
+const TYPE: Record<string, string> = { material: 'Material', replacement: 'Replacement', installation: 'Installation' };
+
+export function JobParts({ complaintId, challans, faulty, catalogue, canEdit, canIssue, fmt, actionsElsewhere = false }: {
+  complaintId: string; challans: ChallanVM[]; faulty: FaultyVM[]; catalogue: FindableProduct[];
+  canEdit: boolean; canIssue: boolean; fmt: (iso: string) => string;
+  /** Layout A (9 Oct 2026): "Raise challan" and "Log faulty part" live in the page's actions rail. */
+  actionsElsewhere?: boolean;
+}) {
+  const router = useRouter();
+  const [pending, start] = useTransition();
+  const [error, setError] = useState<string | null>(null);
+  const [raising, setRaising] = useState(false);
+  const [logging, setLogging] = useState(false);
+  const run = (fn: () => Promise<{ error?: string }>) => start(async () => {
+    setError(null);
+    const r = await fn();
+    if (r.error) setError(r.error);
+    router.refresh();
+  });
+
+  return (
+    <section className="rounded-xl border border-border bg-card p-5 shadow-card">
+      <div className="flex items-center justify-between gap-2">
+        <h2 className="text-micro font-semibold uppercase tracking-wide text-muted-foreground">Parts (challans) - not shown to the customer</h2>
+        {canEdit && !actionsElsewhere && <Button size="sm" icon="plus" onClick={() => setRaising(true)}>Raise challan</Button>}
+      </div>
+      {error && <p role="alert" className="mt-2 text-sm text-danger">{error}</p>}
+      <ul className="mt-3 flex flex-col divide-y divide-border">
+        {challans.length === 0 && <li className="py-1 text-sm text-muted-foreground">No challans. The technician raises one on site when parts are needed.</li>}
+        {challans.map((c) => (
+          // The trail's challan chip lands here (#challan-id).
+          <li key={c.id} id={`challan-${c.id}`} className="scroll-mt-24 rounded-lg py-2.5 target:bg-brand/10 target:ring-2 target:ring-brand/40">
+            <p className="flex flex-wrap items-center gap-2 text-sm">
+              <span className="font-mono font-semibold">{c.challanNo}</span>
+              <Badge tone={STATUS[c.status]?.tone ?? 'neutral'}>{STATUS[c.status]?.label ?? c.status}</Badge>
+              <span className="text-muted-foreground">{TYPE[c.type] ?? c.type}</span>
+              {c.gdnNos.map((g) => <span key={g} className="font-mono text-xs text-brand">{g}</span>)}
+              {(c.cancelledGdnNos ?? []).map((g) => <span key={g} className="font-mono text-xs text-muted-foreground line-through" title="Cancelled by the store">{g}</span>)}
+            </p>
+            <p className="text-xs text-muted-foreground">{c.createdByName ?? '-'} · {fmt(c.createdAt)}{c.note ? ` · ${c.note}` : ''}</p>
+            {c.rejectionReason && <p className="text-xs text-danger">Rejected: {c.rejectionReason}</p>}
+            <ul className="mt-1 text-sm">
+              {c.lines.map((l) => (
+                <li key={l.id} className="flex flex-wrap items-center gap-2 py-0.5">
+                  <span><ProductLink id={l.productId}>{l.productName}</ProductLink> × {l.qty}</span>
+                  {/* What really left the store (live test 2): issued · returned · used. */}
+                  {l.qtyIssued > 0 && <span className="text-xs text-muted-foreground tabular-nums">{l.qtyIssued} issued · {l.qtyReturned} returned · <strong className="text-foreground">{l.qtyIssued - l.qtyReturned} used</strong></span>}
+                  {l.qtyReturnPending > 0 && (
+                    <span className="text-xs text-warning">{l.qtyReturnPending} coming back - the store receives them</span>
+                  )}
+                  {canIssue && l.qtyReturnPending > 0 && (
+                    <ReceiveBack lineId={l.id} qty={l.qtyReturnPending} serial={l.serial} units={l.units} />
+                  )}
+                  {(canEdit || canIssue) && c.status === 'issued' && l.qtyIssued - l.qtyReturned - l.qtyReturnPending > 0 && (
+                    <ReturnUnused max={l.qtyIssued - l.qtyReturned - l.qtyReturnPending} store={canIssue && !l.serial} busy={pending} onReturn={(n) => run(() => returnUnusedPartsAction(l.id, n, undefined, !!l.serial))} />
+                  )}
+                </li>
+              ))}
+            </ul>
+            {c.status === 'pending_approval' && <p className="mt-1 text-xs text-muted-foreground">Approvers see it in My Desk → Waiting on me.</p>}
+            {c.status === 'issued' && canIssue && c.gdnNos[0] && (
+              <div className="mt-1"><GdnFix challanId={c.id} gdnNo={c.gdnNos[0]} lines={c.lines} /></div>
+            )}
+            {c.status === 'approved' && canIssue && (
+              <div className="mt-1.5"><IssueParts challanId={c.id} hasSerial={c.lines.some((l) => l.serial)} label="Issue parts (create GDN)" /></div>
+            )}
+          </li>
+        ))}
+      </ul>
+
+      <div className="mt-3 flex items-center justify-between gap-2 border-t border-border pt-3">
+        <h3 className="text-xs font-semibold">Faulty parts taken out</h3>
+        {canEdit && !actionsElsewhere && <button type="button" className="text-xs font-medium text-brand hover:underline" onClick={() => setLogging(true)}>Log faulty part</button>}
+      </div>
+      <ul className="mt-1 text-sm">
+        {faulty.length === 0 && <li className="text-xs text-muted-foreground">None logged.</li>}
+        {faulty.map((f) => (
+          <li key={f.id} className="flex flex-wrap items-center gap-2 py-0.5">
+            <span>{f.description}{f.productName ? ` (${f.productName})` : ''}{f.serialNo ? ` · S/N ${f.serialNo}` : ''}</span>
+            {f.receivedAt
+              ? <><Badge tone="success">At the store</Badge>{f.caseNo && <Link href={`/services/replacements?q=${encodeURIComponent(f.caseNo)}${f.caseId ? `&open=${f.caseId}` : ''}`} className="font-mono text-xs text-brand hover:underline">{f.caseNo}</Link>}</>
+              : canIssue && <ReceiveWithSerial busy={pending} onReceive={(serial) => run(() => receiveFaultyPartAction(f.id, serial))} />}
+          </li>
+        ))}
+      </ul>
+      <p className="mt-2 text-xs text-muted-foreground">The store&apos;s queue: <Link href="/goods-dispatch/job-parts" className="text-brand hover:underline">Parts counter</Link></p>
+
+      {raising && <RaiseChallan catalogue={catalogue} busy={pending} onClose={() => setRaising(false)}
+        onSave={(input) => { setRaising(false); run(() => raiseJobChallanAction(complaintId, input)); }} />}
+      {logging && <LogFaulty catalogue={catalogue} busy={pending} onClose={() => setLogging(false)}
+        onSave={(input) => { setLogging(false); run(() => logFaultyPartAction(complaintId, input)); }} />}
+    </section>
+  );
+}
+
+/** Store (Stock: Edit): straight into stock. Anyone else: "coming back", the store receives it. */
+function ReturnUnused({ max, store, busy, onReturn }: { max: number; store: boolean; busy: boolean; onReturn: (n: number) => void }) {
+  const [open, setOpen] = useState(false);
+  const [n, setN] = useState(1);
+  if (!open) return <button type="button" className="text-xs font-medium text-brand hover:underline" onClick={() => setOpen(true)}>{store ? 'Return unused to stock' : 'Unused - send back to store'}</button>;
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      <input aria-label="Quantity returned" type="number" min={1} max={max} value={n} onChange={(e) => setN(Number(e.target.value))} className="h-7 w-16 rounded border border-border bg-card px-1.5 text-xs" />
+      <Button size="sm" loading={busy} onClick={() => { setOpen(false); onReturn(n); }}>{store ? 'Return to stock' : 'Send back'}</Button>
+      <button type="button" className="text-xs text-muted-foreground" onClick={() => setOpen(false)}>Cancel</button>
+    </span>
+  );
+}
+
+export function RaiseChallan({ catalogue, busy, onClose, onSave }: {
+  catalogue: FindableProduct[]; busy: boolean; onClose: () => void;
+  onSave: (input: { type: string; lines: { productId: string; qty: number }[]; note: string | null }) => void;
+}) {
+  const [type, setType] = useState('material');
+  const [pick, setPick] = useState('');
+  const [qty, setQty] = useState(1);
+  const [lines, setLines] = useState<{ productId: string; qty: number }[]>([]);
+  const [note, setNote] = useState('');
+  const name = (id: string) => catalogue.find((p) => p.id === id)?.name ?? id;
+  return (
+    <Modal title="Raise challan" icon="truck" size="lg" onClose={onClose}
+      footer={<><Button onClick={onClose}>Cancel</Button><Button variant="primary" loading={busy} disabled={!lines.length} onClick={() => onSave({ type, lines, note: note.trim() || null })}>Send for approval</Button></>}>
+      <div className="grid gap-3">
+        <Field label="Type" htmlFor="jc-type">
+          <select id="jc-type" value={type} onChange={(e) => setType(e.target.value)} className="field-input">
+            <option value="material">Material - parts to complete the job</option>
+            <option value="replacement">Replacement - swap the customer&apos;s unit</option>
+            <option value="installation">Installation - new equipment</option>
+          </select>
+        </Field>
+        <ProductFinder products={catalogue} pickedId={pick} onPick={setPick} />
+        <div className="flex items-end gap-2">
+          <Field label="Quantity" htmlFor="jc-qty"><input id="jc-qty" type="number" min={1} value={qty} onChange={(e) => setQty(Number(e.target.value))} className="field-input w-24" /></Field>
+          <Button disabled={!pick || !(qty > 0)} onClick={() => { setLines([...lines.filter((l) => l.productId !== pick), { productId: pick, qty }]); setPick(''); setQty(1); }}>Add line</Button>
+        </div>
+        {lines.length > 0 && (
+          <ul className="rounded-lg border border-border text-sm">
+            {lines.map((l) => (
+              <li key={l.productId} className="flex items-center justify-between border-b border-border px-3 py-1.5 last:border-0">
+                <span>{name(l.productId)} × {l.qty}</span>
+                <button type="button" className="text-xs text-danger" onClick={() => setLines(lines.filter((x) => x.productId !== l.productId))}>Remove</button>
+              </li>
+            ))}
+          </ul>
+        )}
+        <Field label="Note" htmlFor="jc-note"><textarea id="jc-note" rows={2} value={note} onChange={(e) => setNote(e.target.value)} className="field-input" /></Field>
+      </div>
+    </Modal>
+  );
+}
+
+export function LogFaulty({ catalogue, busy, onClose, onSave }: {
+  catalogue: FindableProduct[]; busy: boolean; onClose: () => void;
+  onSave: (input: { productId: string | null; description: string; serialNo: string | null }) => void;
+}) {
+  const [pick, setPick] = useState('');
+  const [what, setWhat] = useState('');
+  const [serial, setSerial] = useState('');
+  return (
+    <Modal title="Log faulty part" icon="alert-circle" size="lg" onClose={onClose}
+      footer={<><Button onClick={onClose}>Cancel</Button><Button variant="primary" loading={busy} disabled={!what.trim()} onClick={() => onSave({ productId: pick || null, description: what.trim(), serialNo: serial.trim() || null })}>Save</Button></>}>
+      <div className="grid gap-3">
+        <Field label="What is it" required htmlFor="fp-what"><input id="fp-what" value={what} onChange={(e) => setWhat(e.target.value)} placeholder="Burnt LED driver" className="field-input" /></Field>
+        <Field label="Serial number" htmlFor="fp-serial"><input id="fp-serial" value={serial} onChange={(e) => setSerial(e.target.value)} className="field-input" /></Field>
+        <p className="text-xs text-muted-foreground">Optional: pick the product it is.</p>
+        <ProductFinder products={catalogue} pickedId={pick} onPick={setPick} />
+      </div>
+    </Modal>
+  );
+}

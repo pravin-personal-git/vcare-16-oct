@@ -1,0 +1,495 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * Theme tokens — the white-label surface.
+ *
+ * Every colour in this app comes from a token. Per-tenant values (the three
+ * brand colours and the Appearance choices) are injected at runtime from
+ * Organization.themeTokens - see lib/appearance.ts.
+ *
+ * Values are bare HSL triples so Tailwind can apply opacity modifiers —
+ * `bg-brand/10` only works if the token is not a full colour.
+ *
+ * UI refresh (4 Oct 2026, UI-REFRESH-SPEC.md):
+ *   - a neutral grey page instead of lavender, white cards, hairline borders
+ *   - ink, not grey: main text near-black navy, secondary text darkened
+ *   - dark mode, per person (cookie `atlas_theme`, set from the user menu),
+ *     as token overrides only - no component carries a dark: variant
+ *   - density and contrast, per business (Appearance) and per person
+ *
+ * The <html> element carries data-theme (light | dark | system),
+ * data-density and data-contrast, rendered by the root layout from cookies,
+ * so the first paint is already right - no flash.
+ */
+@layer base {
+  :root {
+    /* ---- brand ------------------------------------------------------- */
+    /* Atlas blue #1D4ED8 (4 Oct 2026): the old #00A1E0 failed contrast with
+       white button text (2.9:1). Hovers are mixed from the tenant's own
+       colour in tailwind.config.ts, so a magenta brand hovers magenta. */
+    --brand-primary: 210 100% 40%;        /* G-39: Apple action blue #0066cc */
+    --brand-primary-fg: 0 0% 100%;
+
+    --brand-navy: 213 94% 19%;            /* #032D60 */
+    --brand-navy-fg: 0 0% 100%;
+
+    --brand-accent: 12 100% 67%;          /* #FF7A59 — used sparingly */
+    --brand-accent-fg: 0 0% 100%;
+
+    /* ---- status: never follow the brand, so red means overdue everywhere */
+    /* G-39 (10 Oct 2026, "everywhere"): Binance money colours, Apple surfaces. */
+    --success: 158 96% 25%;               /* #037d50: 4.7:1 on the page, 13 Oct (was #03a66d, 3.2:1) */
+    --warning: 33 86% 34%;               /* #a6610c: 4.6:1 on the page, 13 Oct (was 3.9:1) */
+    --danger: 352 74% 44%;               /* #c41c33: 5.4:1 on the page, 13 Oct (was #de213a, 4.4:1) */
+    --info: 210 100% 40%;
+
+    /* ---- surfaces ---------------------------------------------------- */
+    --background: 240 11% 96%;            /* parchment #f5f5f7 */
+    --card: 0 0% 100%;
+    --surface: 240 20% 98.5%;             /* pearl #fafafc */
+    --muted: 240 9% 94%;
+    --border: 0 0% 88%;                   /* hairline #e0e0e0 */
+    --border-strong: 0 0% 76%;
+
+    --foreground: 240 3% 12%;             /* ink #1d1d1f */
+    --muted-foreground: 240 3% 32%;          /* 11 Oct: #4f4f54 - readable grey, not washed out */
+
+    /* ---- shape ------------------------------------------------------- */
+    --radius-sm: 0.5rem;
+    --radius: 0.75rem;
+    --radius-lg: 1.125rem;
+
+    /* Cards sit on hairlines, not shadows (G-39). Overlays keep theirs. */
+    --shadow-card: 0 0 #0000;
+    --shadow-raised: 0 10px 24px -8px rgb(16 24 40 / 0.16), 0 2px 6px -2px rgb(16 24 40 / 0.06);
+    --shadow-overlay: 0 24px 56px -12px rgb(16 24 40 / 0.32);
+    --shadow-brand: 0 0 #0000;
+
+    /* ---- density ------------------------------------------------------ */
+    --ctl-h: 2.5rem;                      /* inputs and buttons, 40px */
+    --row-py: 0.75rem;                    /* list rows, ~46px */
+
+    /* ---- type --------------------------------------------------------- */
+    --font-sans: var(--font-inter);
+
+    /* The sidebar is a deep shade of the tenant's own brand colour, so every
+       client's rebrand carries through. */
+    --sidebar-bg: color-mix(in srgb, hsl(var(--brand-primary)) 28%, #0c1020);
+
+    color-scheme: light;
+  }
+
+  /* ---- dark mode ----------------------------------------------------- */
+  :root[data-theme='dark'] {
+    --success: 156 87% 42%;
+    --warning: 44 92% 49%;
+    --danger: 352 91% 62%;
+    --info: 210 100% 58%;
+    --background: 210 21% 5%;
+    --card: 214 15% 14%;
+    --surface: 213 14% 17%;
+    --muted: 213 14% 20%;
+    --border: 213 14% 20%;
+    --border-strong: 213 12% 30%;
+    --foreground: 210 14% 93%;
+    --muted-foreground: 214 14% 72%;
+    --shadow-card: 0 0 #0000;
+    --shadow-raised: 0 12px 28px -8px rgb(0 0 0 / 0.6);
+    --shadow-overlay: 0 28px 64px -12px rgb(0 0 0 / 0.7);
+    --sidebar-bg: color-mix(in srgb, hsl(var(--brand-primary)) 18%, #070a12);
+    color-scheme: dark;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root[data-theme='system'] {
+      --success: 156 87% 42%;
+      --warning: 44 92% 49%;
+      --danger: 352 91% 62%;
+      --info: 210 100% 58%;
+      --background: 210 21% 5%;
+      --card: 214 15% 14%;
+      --surface: 213 14% 17%;
+      --muted: 213 14% 20%;
+      --border: 213 14% 20%;
+      --border-strong: 213 12% 30%;
+      --foreground: 210 14% 93%;
+      --muted-foreground: 214 14% 72%;
+      --shadow-card: 0 0 #0000;
+      --shadow-raised: 0 12px 28px -8px rgb(0 0 0 / 0.6);
+      --shadow-overlay: 0 28px 64px -12px rgb(0 0 0 / 0.7);
+      --sidebar-bg: color-mix(in srgb, hsl(var(--brand-primary)) 18%, #070a12);
+      color-scheme: dark;
+    }
+  }
+
+  /* ---- contrast (per person) ------------------------------------------ */
+  html[data-contrast='high'] {
+    --foreground: 222 64% 7%;
+    --muted-foreground: 220 18% 24%;
+    --border: 220 14% 80%;
+    --border-strong: 220 14% 62%;
+  }
+  html[data-contrast='high'][data-theme='dark'] {
+    --foreground: 0 0% 100%;
+    --muted-foreground: 220 18% 84%;
+    --border: 224 14% 30%;
+    --border-strong: 224 12% 44%;
+  }
+  @media (prefers-color-scheme: dark) {
+    html[data-contrast='high'][data-theme='system'] {
+      --foreground: 0 0% 100%;
+      --muted-foreground: 220 18% 84%;
+      --border: 224 14% 30%;
+      --border-strong: 224 12% 44%;
+    }
+  }
+
+  /* ---- density (per person, overrides the business default) ------------ */
+  html[data-density='compact'] { --ctl-h: 2.125rem; --row-py: 0.5rem; }
+  html[data-density='comfortable'] { --ctl-h: 2.5rem; --row-py: 0.75rem; }
+
+  html {
+    font-family: var(--font-sans), ui-sans-serif, system-ui, 'Segoe UI', 'Noto Sans Devanagari', sans-serif;
+  }
+
+  body {
+    background-color: hsl(var(--background));
+    color: hsl(var(--foreground));
+    font-size: 0.875rem;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    font-feature-settings: 'cv11', 'ss01';
+  }
+
+  h1, h2, h3 { text-wrap: balance; letter-spacing: -0.022em; }
+
+  /* A press shrinks the control a touch - one micro-interaction everywhere (G-39). */
+  button:not(:disabled):active { transform: scale(0.97); }
+
+  /* Figures line up in every table and tile. */
+  .tabular-nums, td, th { font-variant-numeric: tabular-nums; }
+
+  /* Focus is a brand signal, not a browser default. One ring everywhere. */
+  :focus-visible {
+    outline: 2px solid hsl(var(--brand-primary));
+    outline-offset: 2px;
+  }
+
+  ::selection { background: hsl(var(--brand-primary) / 0.22); }
+}
+
+@layer components {
+  /* Form controls repeat on every screen. Defining them once keeps sixty
+     fields from drifting into sixty slightly different fields. */
+  .field-input {
+    @apply w-full rounded-sm border border-border bg-card px-3 text-sm text-foreground
+           outline-none transition placeholder:text-muted-foreground/80
+           hover:border-border-strong
+           focus:border-brand focus:ring-[3px] focus:ring-brand/20
+           disabled:cursor-not-allowed disabled:bg-muted disabled:text-muted-foreground;
+    min-height: var(--ctl-h);
+    padding-block: 0.5rem;
+  }
+
+  .field-label {
+    @apply mb-1.5 block text-xs font-semibold text-foreground/80;
+  }
+
+  /* The uppercase eyebrow over a group: 11px, heavy, letter-spaced. */
+  .eyebrow {
+    @apply text-micro font-extrabold uppercase text-muted-foreground;
+  }
+
+  /* The list-screen scroll containers. A visible-but-quiet scrollbar beats
+     an invisible one — users need to know a table scrolls sideways. */
+  .thin-scroll {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--border-strong)) transparent;
+  }
+  .thin-scroll::-webkit-scrollbar {
+    height: 8px;
+    width: 8px;
+  }
+  .thin-scroll::-webkit-scrollbar-thumb {
+    background-color: hsl(var(--border-strong));
+    border-radius: 999px;
+  }
+  .thin-scroll::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  /* The primary button: a top-light gradient, an inner highlight and a soft
+     shadow in the brand colour. Depth, not decoration - it is the one thing
+     on the screen you are meant to press. */
+  .btn-depth {
+    /* Flat since G-39 (10 Oct 2026): colour, not gradient, says "press me". */
+    background-image: none;
+  }
+}
+
+/*
+ * The shop (UI refresh, 4 Oct 2026). Every colour is the business's own: the
+ * hero is its deep colour lit by its main colour, so Vcare's shop is magenta
+ * and N.A.I.R.'s blue with nothing per client in the code.
+ */
+.shop-hero {
+  background:
+    radial-gradient(60% 80% at 88% 8%, hsl(var(--brand-primary) / 0.85), transparent 60%),
+    radial-gradient(50% 70% at 0% 100%, hsl(var(--brand-primary) / 0.45), transparent 60%),
+    linear-gradient(140deg, hsl(var(--brand-navy)), color-mix(in srgb, hsl(var(--brand-navy)) 65%, black));
+  color: #fff;
+  isolation: isolate;
+}
+/* A faint dot grid over the hero, faded out towards the bottom. */
+.shop-hero::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background-image: radial-gradient(rgb(255 255 255 / 0.16) 1px, transparent 1.2px);
+  background-size: 22px 22px;
+  mask-image: linear-gradient(180deg, #000 10%, transparent 85%);
+}
+/* Where a photo will be: the brand tint, never a grey "no image". */
+.shop-ph {
+  background:
+    radial-gradient(80% 80% at 30% 20%, hsl(var(--brand-primary) / 0.16), transparent 70%),
+    linear-gradient(160deg, hsl(var(--brand-navy) / 0.08), hsl(var(--brand-primary) / 0.05));
+}
+.shop-photo {
+  background: radial-gradient(90% 90% at 50% 35%, hsl(var(--card)), hsl(var(--muted)));
+}
+@keyframes shop-pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.45; transform: scale(0.8); } }
+.shop-live { animation: shop-pulse 2s ease-in-out infinite; }
+@keyframes shop-rise { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
+.shop-rise { animation: shop-rise 420ms cubic-bezier(.2,.7,.2,1) both; }
+@media (prefers-reduced-motion: reduce) { .shop-live, .shop-rise { animation: none; } }
+.scrollbar-none { scrollbar-width: none; }
+.scrollbar-none::-webkit-scrollbar { display: none; }
+
+/*
+ * The deep sidebar. The sidebar markup uses the ordinary tokens; inside it
+ * they are re-pointed so text, hover and borders go light-on-dark, and the
+ * active item becomes a solid brand pill. Unlayered and after the utilities,
+ * so it wins over `bg-card` on the same element.
+ */
+.sidebar-dark {
+  --foreground: 0 0% 100%;
+  --muted-foreground: 225 25% 80%;
+  --muted: 0 0% 100% / 0.09;
+  --border: 0 0% 100% / 0.11;
+  --background: 0 0% 100% / 0.07;
+  background-color: var(--sidebar-bg);
+  border-color: transparent;
+  color: hsl(var(--foreground));
+}
+.sidebar-charcoal { --sidebar-bg: #161a23; }
+.sidebar-dark .bg-brand\/10,
+.sidebar-dark .bg-brand\/\[0\.07\] {
+  background-color: hsl(var(--brand-primary));
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.18), 0 4px 12px -4px rgb(0 0 0 / 0.5);
+}
+.sidebar-dark .bg-brand\/\[0\.07\] { background-color: hsl(var(--brand-primary) / 0.45); box-shadow: none; }
+.sidebar-dark input::placeholder { color: hsl(225 25% 80% / 0.8); }
+
+/*
+ * Dark mode: text in the brand or navy colour is lifted so a dark brand (a
+ * navy, a maroon) stays readable on a dark page. Backgrounds keep the brand.
+ */
+:root[data-theme='dark'] .text-navy { color: hsl(var(--foreground)); }
+:root[data-theme='dark'] .text-brand { color: color-mix(in srgb, hsl(var(--brand-primary)) 70%, white); }
+@media (prefers-color-scheme: dark) {
+  :root[data-theme='system'] .text-navy { color: hsl(var(--foreground)); }
+  :root[data-theme='system'] .text-brand { color: color-mix(in srgb, hsl(var(--brand-primary)) 70%, white); }
+}
+/* ...but navy text on a white pill (portal and shop banners) stays navy. */
+:root[data-theme='dark'] .bg-white.text-navy,
+:root[data-theme='dark'] .bg-white .text-navy { color: hsl(var(--brand-navy)); }
+@media (prefers-color-scheme: dark) {
+  :root[data-theme='system'] .bg-white.text-navy,
+  :root[data-theme='system'] .bg-white .text-navy { color: hsl(var(--brand-navy)); }
+}
+:root .sidebar-dark .text-navy { color: hsl(0 0% 100%); }
+:root .sidebar-dark .text-brand { color: hsl(var(--brand-primary-fg)); }
+
+/* The light sidebar: brand tint and a 3px brand bar on the active item. */
+.sidebar-light { background-color: hsl(var(--card)); }
+.sidebar-light a.bg-brand\/10 { box-shadow: inset 3px 0 0 hsl(var(--brand-primary)); }
+html[dir='rtl'] .sidebar-light a.bg-brand\/10 { box-shadow: inset -3px 0 0 hsl(var(--brand-primary)); }
+
+/* Printed documents ignore the app chrome entirely, and never print dark. */
+@media print {
+  .no-print {
+    display: none !important;
+  }
+  :root[data-theme] {
+    --background: 0 0% 100%;
+    --card: 0 0% 100%;
+    --surface: 0 0% 100%;
+    --muted: 220 18% 94.5%;
+    --border: 220 15% 85%;
+    --border-strong: 220 12% 70%;
+    --foreground: 222 47% 10%;
+    --muted-foreground: 220 13% 35%;
+    --success: 145 63% 32%;
+    --warning: 30 95% 40%;
+    --danger: 354 78% 44%;
+    --info: 211 90% 40%;
+    color-scheme: light;
+  }
+}
+
+/*
+ * The row a `?open=<id>` link pointed at (OpenTarget, 7 Oct 2026).
+ *
+ * A ring and not a background fill: rows already use background to mean
+ * "selected", and arriving from a link is not a selection. It fades out after
+ * four seconds, because after that the person has found their record and the
+ * highlight is only in the way.
+ */
+.atlas-open-target > td,
+.atlas-open-target {
+  background: hsl(var(--brand-primary) / 0.1) !important;
+}
+.atlas-open-target {
+  outline: 2px solid hsl(var(--brand-primary));
+  outline-offset: -2px;
+  transition: background 0.4s ease, outline-color 0.4s ease;
+}
+
+/* ------------------------------------------------------------------ dashboards
+ * The dashboards (11 Oct 2026, dashboards-demo.html). Chart series colours are
+ * fixed tokens - c1 is the action blue, the rest never follow the brand, so a
+ * client's magenta does not turn every chart magenta. Dark values are the
+ * demo's own.
+ */
+:root {
+  --c1: 210 100% 40%;
+  --c2: 172 70% 34%;
+  --c3: 33 86% 46%;
+  --c4: 262 60% 56%;
+  --c5: 330 70% 52%;
+  --c6: 200 18% 58%;
+}
+:root[data-theme='dark'] {
+  --c1: 210 100% 62%; --c2: 168 60% 48%; --c3: 40 90% 55%; --c4: 262 80% 72%; --c5: 330 80% 66%; --c6: 210 14% 62%;
+}
+@media (prefers-color-scheme: dark) {
+  :root[data-theme='system'] {
+    --c1: 210 100% 62%; --c2: 168 60% 48%; --c3: 40 90% 55%; --c4: 262 80% 72%; --c5: 330 80% 66%; --c6: 210 14% 62%;
+  }
+}
+/* Status palette, the second eight (G9, 11 Oct 2026 - Pravin: "very limited
+ * set of colours"). Used as text on a 12% tint and as a dot, so light values
+ * stay dark enough to read on white and dark values light enough on ink. */
+:root {
+  --pc1: 195 85% 33%; --pc2: 235 55% 50%; --pc3: 285 50% 45%; --pc4: 20 85% 45%;
+  --pc5: 45 90% 32%; --pc6: 90 60% 30%; --pc7: 25 45% 36%; --pc8: 220 60% 30%;
+}
+:root[data-theme='dark'] {
+  --pc1: 195 80% 60%; --pc2: 235 80% 74%; --pc3: 285 60% 72%; --pc4: 20 90% 62%;
+  --pc5: 45 90% 55%; --pc6: 90 55% 55%; --pc7: 25 45% 62%; --pc8: 220 70% 72%;
+}
+@media (prefers-color-scheme: dark) {
+  :root[data-theme='system'] {
+    --pc1: 195 80% 60%; --pc2: 235 80% 74%; --pc3: 285 60% 72%; --pc4: 20 90% 62%;
+    --pc5: 45 90% 55%; --pc6: 90 55% 55%; --pc7: 25 45% 62%; --pc8: 220 70% 72%;
+  }
+}
+.dash .micro-l { font-size: 0.6875rem; font-weight: 600; letter-spacing: .07em; text-transform: uppercase; color: hsl(var(--muted-foreground)); }
+.dash .tabular, .dash .font-mono { font-variant-numeric: tabular-nums; letter-spacing: 0; }
+.dash svg text { font-family: var(--font-plex), var(--font-sans), sans-serif; }
+.dash .press:active, .dash button:not(:disabled):active { transform: scale(.97); }
+.dash .grid > *, .dash section { min-width: 0; }
+@keyframes dash-rise { from { opacity: 0; transform: translateY(6px) } to { opacity: 1; transform: none } }
+.dash-rise { animation: dash-rise .28s ease-out both; }
+@keyframes dash-slide { from { transform: translateX(24px); opacity: .4 } to { transform: none; opacity: 1 } }
+.dash-drawer { animation: dash-slide .22s cubic-bezier(.2,.8,.2,1) both; box-shadow: var(--shadow-overlay); }
+html[dir='rtl'] .dash-drawer { animation-name: dash-rise; }
+@keyframes dash-pop { from { transform: translateY(8px); opacity: 0 } to { transform: none; opacity: 1 } }
+.dash-pop { animation: dash-pop .18s ease-out both; box-shadow: var(--shadow-raised); }
+.dash-raised { box-shadow: var(--shadow-raised); }
+.dash-tile { transition: border-color .15s, background-color .15s; }
+.dash-tile:hover { border-color: hsl(var(--brand-primary) / .55); }
+.dash-tile:hover .dash-go { opacity: 1; transform: none; }
+.dash-go { opacity: 0; transform: translate(-3px, 3px); transition: all .15s; }
+.dash-bar { transition: width .5s cubic-bezier(.2,.8,.2,1); }
+.dash-seg:hover { filter: brightness(1.08); }
+@keyframes dash-live { 0% { box-shadow: 0 0 0 0 hsl(var(--success) / .5) } 100% { box-shadow: 0 0 0 8px hsl(var(--success) / 0) } }
+.dash-live { animation: dash-live 1.6s ease-out 4; }
+@media print { .dash .no-print { display: none !important } }
+
+/* Buttons, Option A (11 Oct 2026, ops-pages demo): WhatsApp green token and a 1px lift on hover. */
+:root { --wa: 142 70% 36%; }
+:root[data-theme='dark'] { --wa: 142 60% 45%; }
+@media (prefers-color-scheme: dark) { :root[data-theme='system'] { --wa: 142 60% 45%; } }
+.btn-lift { transition: transform .15s, box-shadow .15s, background-color .15s, color .15s; }
+.btn-lift:not(:disabled):hover { transform: translateY(-1px); }
+.btn-lift:not(:disabled):active { transform: scale(.97); }
+
+/* Document preview (11 Oct 2026, DocSplit): the paper drawn at 62% and fading out; full size in print. */
+.doc-preview-scale { width: 161.3%; transform: scale(.62); }
+.doc-preview-frame { -webkit-mask-image: linear-gradient(to bottom, #000 70%, transparent); mask-image: linear-gradient(to bottom, #000 70%, transparent); }
+@media print {
+  .doc-preview-scale { width: auto !important; transform: none !important; }
+  .doc-preview-frame { -webkit-mask-image: none !important; mask-image: none !important; height: auto !important; overflow: visible !important; }
+}
+
+/* Customer job screen (portal + no-login link), 11 Oct 2026, ops-pages demo tab 8.
+   Motion only when the phone has not asked for less of it. */
+.cj-hero { background: linear-gradient(135deg, hsl(var(--brand-primary)), hsl(var(--brand-navy))); }
+@media (prefers-reduced-motion: no-preference) {
+  .cj-ring { animation: cj-ring 1.1s cubic-bezier(.2, .8, .2, 1) both; }
+  .cj-rise { animation: cj-rise .45s ease-out both; }
+  .cj-stagger > * { animation: cj-rise .45s ease-out both; }
+  .cj-stagger > *:nth-child(2) { animation-delay: .06s; }
+  .cj-stagger > *:nth-child(3) { animation-delay: .12s; }
+  .cj-stagger > *:nth-child(4) { animation-delay: .18s; }
+  .cj-stagger > *:nth-child(5) { animation-delay: .24s; }
+  .cj-stagger > *:nth-child(n+6) { animation-delay: .3s; }
+  .cj-pulse { animation: cj-pulse 1.6s ease-out infinite; }
+  .cj-float { animation: cj-float 3.2s ease-in-out infinite; }
+  .cj-pop { animation: cj-pop .35s cubic-bezier(.2, .8, .2, 1) both; }
+}
+@keyframes cj-ring { from { stroke-dashoffset: var(--len); } }
+@keyframes cj-rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+@keyframes cj-pulse { 0% { box-shadow: 0 0 0 0 hsl(var(--brand-primary) / .45); } 100% { box-shadow: 0 0 0 12px hsl(var(--brand-primary) / 0); } }
+@keyframes cj-float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-3px); } }
+@keyframes cj-pop { from { opacity: 0; transform: scale(.94); } to { opacity: 1; transform: none; } }
+
+/*
+ * The page background the business chose (Settings > Appearance, 12 Oct
+ * 2026, lib/page-background): `--page-bg`, light mode only. The main area and
+ * the dashboards' sticky filter bar paint the same one, fixed to the window,
+ * so the bar shows no band over a gradient.
+ */
+.page-bg { background: var(--page-bg, hsl(var(--background))); background-attachment: fixed; }
+
+/* Dashboard motion respects "reduce motion" (Impeccable review, 13 Oct 2026). */
+@media (prefers-reduced-motion: reduce) {
+  .dash-rise, .dash-drawer, .dash-pop, .dash-live { animation: none; }
+  .dash-bar, .dash-go { transition: none; }
+}
+
+/*
+ * Text on a tint of its own colour (13 Oct 2026, WCAG audit): a status or
+ * brand word on a 10-15% wash of itself fell to 3.8-4.4:1. Mixing a fifth of
+ * the ink in keeps the hue and clears 5:1 in light and dark, for any client
+ * brand colour. Badges, chips and the page badge use these.
+ */
+.text-on-tint-brand { color: color-mix(in srgb, hsl(var(--brand-primary)) 80%, hsl(var(--foreground))); }
+.text-on-tint-navy { color: color-mix(in srgb, hsl(var(--brand-navy)) 80%, hsl(var(--foreground))); }
+.text-on-tint-success { color: color-mix(in srgb, hsl(var(--success)) 80%, hsl(var(--foreground))); }
+.text-on-tint-warning { color: color-mix(in srgb, hsl(var(--warning)) 80%, hsl(var(--foreground))); }
+.text-on-tint-danger { color: color-mix(in srgb, hsl(var(--danger)) 80%, hsl(var(--foreground))); }
+.text-on-tint-info { color: color-mix(in srgb, hsl(var(--info)) 80%, hsl(var(--foreground))); }
+
+/* Movement is optional (13 Oct 2026): dialogs, drawers and spinners-in-place keep their state change, not the slide. */
+@media (prefers-reduced-motion: reduce) {
+  .animate-slide-up, .animate-fade-in, .btn-lift { animation: none !important; }
+  .btn-lift:not(:disabled):hover { transform: none; }
+  html:focus-within { scroll-behavior: auto; }
+}
+
+[aria-disabled="true"].btn-lift:hover { transform: none; }

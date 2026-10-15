@@ -1,0 +1,17 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "regions": [
+    "bom1"
+  ],
+  "framework": "nextjs",
+  "crons": [
+    {
+      "path": "/api/cron/phone-health",
+      "schedule": "30 21 * * *"
+    },
+    {
+      "path": "/api/cron/daily",
+      "schedule": "30 2 * * *"
+    }
+  ]
+}

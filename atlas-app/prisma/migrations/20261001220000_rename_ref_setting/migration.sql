@@ -1,0 +1,16 @@
+-- "Ref Setting" becomes "Reference Data" (workstream B, 1 Oct 2026).
+--
+-- The menu review found one genuinely broken name. "Ref Setting" is not
+-- English, says nothing about what is inside it (units, HSN codes, chart of
+-- accounts, bank accounts), and is the only group in the sidebar a new user
+-- cannot guess the contents of.
+--
+-- A label change only. The routes, the menu ids and every StoreMenuConfig and
+-- RoleMenuConfig row are untouched, so nobody's visibility changes and no
+-- bookmark breaks.
+--
+-- NOTE: the label is matched by name in lib/plans.ts (SELLABLE_MODULES) and in
+-- the sidebar's icon map, both updated in the same commit. A test now asserts
+-- every module name in plans.ts exists in the menu tree, so the next rename
+-- cannot silently break a plan.
+UPDATE "Menu" SET "label" = 'Reference Data' WHERE "label" = 'Ref Setting';

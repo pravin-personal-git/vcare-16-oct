@@ -1,0 +1,47 @@
+# Line endings.
+#
+# Without this file, a clone onto Windows checks every LF file out as CRLF and
+# git then reports the whole repository as modified — 292 files and ~50,000
+# changed lines where nothing was actually edited. That makes `git status`
+# useless for seeing what you did, and a commit made in that state touches
+# hundreds of files, so `git log` can never answer "when did this break?".
+#
+# `text=auto` normalises everything to LF in the repository while leaving each
+# working tree alone. It is checked in rather than left to `core.autocrlf`
+# because a per-machine setting is one every new developer has to remember.
+* text=auto
+
+# Explicitly LF — these are read by tooling that does not tolerate CRLF, and a
+# shell script with CRLF line endings fails with a confusing `bad interpreter`.
+*.ts     text eol=lf
+*.tsx    text eol=lf
+*.js     text eol=lf
+*.mjs    text eol=lf
+*.json   text eol=lf
+*.css    text eol=lf
+*.md     text eol=lf
+*.sql    text eol=lf
+*.prisma text eol=lf
+*.yml    text eol=lf
+*.yaml   text eol=lf
+*.sh     text eol=lf
+
+# Windows-only files keep CRLF.
+*.ps1    text eol=crlf
+*.cmd    text eol=crlf
+*.bat    text eol=crlf
+
+# Binary — never touched, never diffed as text.
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.webp binary
+*.ico  binary
+*.pdf  binary
+*.woff  binary
+*.woff2 binary
+*.ttf   binary
+*.xlsx binary
+*.docx binary
+*.pptx binary

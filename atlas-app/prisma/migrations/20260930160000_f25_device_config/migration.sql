@@ -1,0 +1,12 @@
+-- F2.5: an adapter's NON-SECRET settings (a base URL, CSV column names).
+--
+-- Fields an adapter marks `secret` are never written here. A vendor password
+-- belongs in the connector agent's own config on the office PC and in the
+-- password manager - never in this database, a commit or a log (AGENTS.md
+-- section 6). A database column is all three eventually: it lands in a backup,
+-- in a SELECT * during a support call, in an audit row. And it is not even our
+-- secret to lose - it belongs to the client's biometric vendor.
+--
+-- `assertNoSecrets` in server/attendance-capture/setup.ts enforces it, and
+-- attendance-capture-secrets.test.ts proves the enforcement is still wired in.
+ALTER TABLE "AttendanceDevice" ADD COLUMN IF NOT EXISTS "config" JSONB;

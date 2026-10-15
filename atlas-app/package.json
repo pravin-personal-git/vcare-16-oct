@@ -1,0 +1,76 @@
+{
+  "name": "atlas-app",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "dev:clean": "rm -rf .next && next dev",
+    "build": "node scripts/check-db-url.mjs && prisma generate && prisma migrate deploy && tsx prisma/sync-tenant-defaults.ts && next build",
+    "start": "next start",
+    "lint": "next lint",
+    "typecheck": "tsc --noEmit",
+    "db:generate": "prisma generate",
+    "db:migrate": "node scripts/guard-migrate.mjs",
+    "db:studio": "prisma studio",
+    "db:seed": "tsx prisma/seed.ts",
+    "db:deploy": "prisma migrate deploy",
+    "db:deploy:prod": "npm run prod:guard && dotenv -e .env.production -- prisma migrate deploy",
+    "provision:platform-owner": "tsx prisma/provision-platform-owner.ts",
+    "provision:platform-owner:prod": "npm run prod:guard && dotenv -e .env.production -- tsx prisma/provision-platform-owner.ts",
+    "recover:platform-owner:prod": "npm run prod:guard && dotenv -e .env.production -- tsx prisma/recover-platform-owner.ts",
+    "db:defaults": "tsx prisma/sync-tenant-defaults.ts",
+    "db:defaults:prod": "npm run prod:guard && dotenv -e .env.production -- tsx prisma/sync-tenant-defaults.ts",
+    "db:studio:prod": "npm run prod:guard && dotenv -e .env.production -- prisma studio",
+    "prod:guard": "node scripts/require-prod-env.mjs",
+    "db:check": "node scripts/check-db-url.mjs"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.2.0",
+    "@tanstack/react-query": "^5.62.0",
+    "@tanstack/react-table": "^8.20.0",
+    "@zxing/browser": "0.2.1",
+    "@zxing/library": "0.23.0",
+    "clsx": "^2.1.1",
+    "jose": "^6.2.12",
+    "leaflet": "^1.9.4",
+    "next": "^15.1.0",
+    "next-intl": "^3.26.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "react-leaflet": "^5.0.0",
+    "server-only": "^0.0.1",
+    "tailwind-merge": "^2.6.0",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@types/leaflet": "^1.9.22",
+    "@types/node": "^22.10.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "autoprefixer": "^10.4.20",
+    "dotenv-cli": "^8.0.0",
+    "eslint": "^9.17.0",
+    "eslint-config-next": "^15.1.0",
+    "postcss": "^8.5.0",
+    "prisma": "^6.2.0",
+    "tailwindcss": "^3.4.17",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0",
+    "vitest": "^2.1.8"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "prisma": {
+    "seed": "tsx prisma/seed.ts"
+  },
+  "allowScripts": {
+    "prisma@6.19.3": true,
+    "@prisma/client@6.19.3": true,
+    "@prisma/engines@6.19.3": true,
+    "esbuild@0.28.2": true,
+    "esbuild@0.21.5": true,
+    "sharp@0.34.5": true,
+    "unrs-resolver@1.12.2": true
+  }
+}

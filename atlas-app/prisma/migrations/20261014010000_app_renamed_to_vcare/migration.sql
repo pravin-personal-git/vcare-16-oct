@@ -1,0 +1,19 @@
+-- The phone app is called Vcare now, and the activity log has to agree.
+-- Pravin, 13 Oct 2026: change the name wherever it shows.
+--
+-- `AuditEvent.via` records HOW something was done - 'web', 'portal', 'api',
+-- or from the phone - and the Activity Log prints it beside the person's
+-- name. So it is a stored value AND a visible one, which is the only reason
+-- this needs SQL at all: renaming it in the code alone would leave one app
+-- showing up under two names in the same list, with no way for a reader to
+-- know they were the same thing.
+--
+-- Everything else in this change is text on a screen and needed no migration.
+-- Deliberately NOT renamed anywhere: the Android package
+-- (`com.nairsolutions.maalikos`), the EAS slug and the deep-link scheme.
+-- Those are the app's identity to the Play Store and to Android; changing
+-- one would stop the next build being an update and install a second app
+-- beside the first.
+--
+-- Idempotent: a second run matches nothing.
+UPDATE "AuditEvent" SET via = 'Vcare' WHERE via = 'MAALIK OS';

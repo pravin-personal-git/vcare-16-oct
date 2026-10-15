@@ -1,0 +1,481 @@
+-- F2 sync columns: master tables (56) - F2-SYNC-FOUNDATION-SPEC.md §4.2, §4.5.
+--
+-- Reference data people edit. Field-level last-writer-wins by version, then timestamp.
+--
+-- One migration PER CLASS, not one for all 198, so a failure is diagnosable
+-- and re-runnable rather than an all-or-nothing on the whole schema.
+--
+-- Safe on a large table: Postgres 11+ adds a column with a constant default
+-- as a metadata change, without rewriting the table.
+--
+-- updatedAt is backfilled from createdAt where one exists, and only from
+-- CURRENT_TIMESTAMP where it does not. A blanket now() would make every
+-- historical row look edited on the day of the migration.
+
+ALTER TABLE "Account" ADD COLUMN IF NOT EXISTS "version" INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE "Account" ADD COLUMN IF NOT EXISTS "originNodeId" TEXT;
+ALTER TABLE "Account" ADD COLUMN IF NOT EXISTS "deletedAt" TIMESTAMP(3);
+ALTER TABLE "Account" ADD COLUMN IF NOT EXISTS "deletedBy" TEXT;
+CREATE INDEX IF NOT EXISTS "Account_deletedAt_idx" ON "Account"("deletedAt");
+
+ALTER TABLE "Asset" ADD COLUMN IF NOT EXISTS "version" INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE "Asset" ADD COLUMN IF NOT EXISTS "originNodeId" TEXT;
+ALTER TABLE "Asset" ADD COLUMN IF NOT EXISTS "deletedAt" TIMESTAMP(3);
+ALTER TABLE "Asset" ADD COLUMN IF NOT EXISTS "deletedBy" TEXT;
+CREATE INDEX IF NOT EXISTS "Asset_deletedAt_idx" ON "Asset"("deletedAt");
+
+ALTER TABLE "AssetBatch" ADD COLUMN IF NOT EXISTS "version" INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE "AssetBatch" ADD COLUMN IF NOT EXISTS "originNodeId" TEXT;
+ALTER TABLE "AssetBatch" ADD COLUMN IF NOT EXISTS "deletedAt" TIMESTAMP(3);
+ALTER TABLE "AssetBatch" ADD COLUMN IF NOT EXISTS "deletedBy" TEXT;
+ALTER TABLE "AssetBatch" ADD COLUMN IF NOT EXISTS "updatedAt" TIMESTAMP(3);
+UPDATE "AssetBatch" SET "updatedAt" = COALESCE("updatedAt", "createdAt") WHERE "updatedAt" IS NULL;
+ALTER TABLE "AssetBatch" ALTER COLUMN "updatedAt" SET NOT NULL;
+ALTER TABLE "AssetBatch" ALTER COLUMN "updatedAt" SET DEFAULT CURRENT_TIMESTAMP;
+CREATE INDEX IF NOT EXISTS "AssetBatch_deletedAt_idx" ON "AssetBatch"("deletedAt");
+
+ALTER TABLE "AttendanceZone" ADD COLUMN IF NOT EXISTS "version" INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE "AttendanceZone" ADD COLUMN IF NOT EXISTS "originNodeId" TEXT;
+ALTER TABLE "AttendanceZone" ADD COLUMN IF NOT EXISTS "deletedAt" TIMESTAMP(3);
+ALTER TABLE "AttendanceZone" ADD COLUMN IF NOT EXISTS "deletedBy" TEXT;
+CREATE INDEX IF NOT EXISTS "AttendanceZone_deletedAt_idx" ON "AttendanceZone"("deletedAt");
+
+ALTER TABLE "BankAccount" ADD COLUMN IF NOT EXISTS "version" INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE "BankAccount" ADD COLUMN IF NOT EXISTS "originNodeId" TEXT;
+ALTER TABLE "BankAccount" ADD COLUMN IF NOT EXISTS "deletedAt" TIMESTAMP(3);
+ALTER TABLE "BankAccount" ADD COLUMN IF NOT EXISTS "deletedBy" TEXT;
+CREATE INDEX IF NOT EXISTS "BankAccount_deletedAt_idx" ON "BankAccount"("deletedAt");
+
+ALTER TABLE "BillOfMaterials" ADD COLUMN IF NOT EXISTS "version" INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE "BillOfMaterials" ADD COLUMN IF NOT EXISTS "originNodeId" TEXT;
+ALTER TABLE "BillOfMaterials" ADD COLUMN IF NOT EXISTS "deletedAt" TIMESTAMP(3);
+ALTER TABLE "BillOfMaterials" ADD COLUMN IF NOT EXISTS "deletedBy" TEXT;
+CREATE INDEX IF NOT EXISTS "BillOfMaterials_deletedAt_idx" ON "BillOfMaterials"("deletedAt");
+
+ALTER TABLE "BomComponent" ADD COLUMN IF NOT EXISTS "version" INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE "BomComponent" ADD COLUMN IF NOT EXISTS "originNodeId" TEXT;
+ALTER TABLE "BomComponent" ADD COLUMN IF NOT EXISTS "deletedAt" TIMESTAMP(3);
+ALTER TABLE "BomComponent" ADD COLUMN IF NOT EXISTS "deletedBy" TEXT;
+ALTER TABLE "BomComponent" ADD COLUMN IF NOT EXISTS "updatedAt" TIMESTAMP(3);
+UPDATE "BomComponent" SET "updatedAt" = COALESCE("updatedAt", CURRENT_TIMESTAMP) WHERE "updatedAt" IS NULL;
+ALTER TABLE "BomComponent" ALTER COLUMN "updatedAt" SET NOT NULL;
+ALTER TABLE "BomComponent" ALTER COLUMN "updatedAt" SET DEFAULT CURRENT_TIMESTAMP;
+CREATE INDEX IF NOT EXISTS "BomComponent_deletedAt_idx" ON "BomComponent"("deletedAt");
+
+ALTER TABLE "Brand" ADD COLUMN IF NOT EXISTS "version" INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE "Brand" ADD COLUMN IF NOT EXISTS "originNodeId" TEXT;
+ALTER TABLE "Brand" ADD COLUMN IF NOT EXISTS "deletedAt" TIMESTAMP(3);
+ALTER TABLE "Brand" ADD COLUMN IF NOT EXISTS "deletedBy" TEXT;
+ALTER TABLE "Brand" ADD COLUMN IF NOT EXISTS "updatedAt" TIMESTAMP(3);
+UPDATE "Brand" SET "updatedAt" = COALESCE("updatedAt", CURRENT_TIMESTAMP) WHERE "updatedAt" IS NULL;
+ALTER TABLE "Brand" ALTER COLUMN "updatedAt" SET NOT NULL;
+ALTER TABLE "Brand" ALTER COLUMN "updatedAt" SET DEFAULT CURRENT_TIMESTAMP;
+CREATE INDEX IF NOT EXISTS "Brand_deletedAt_idx" ON "Brand"("deletedAt");
+
+ALTER TABLE "Category" ADD COLUMN IF NOT EXISTS "version" INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE "Category" ADD COLUMN IF NOT EXISTS "originNodeId" TEXT;
+ALTER TABLE "Category" ADD COLUMN IF NOT EXISTS "deletedAt" TIMESTAMP(3);
+ALTER TABLE "Category" ADD COLUMN IF NOT EXISTS "deletedBy" TEXT;
+ALTER TABLE "Category" ADD COLUMN IF NOT EXISTS "updatedAt" TIMESTAMP(3);
+UPDATE "Category" SET "updatedAt" = COALESCE("updatedAt", CURRENT_TIMESTAMP) WHERE "updatedAt" IS NULL;
+ALTER TABLE "Category" ALTER COLUMN "updatedAt" SET NOT NULL;
+ALTER TABLE "Category" ALTER COLUMN "updatedAt" SET DEFAULT CURRENT_TIMESTAMP;
+CREATE INDEX IF NOT EXISTS "Category_deletedAt_idx" ON "Category"("deletedAt");
+
+ALTER TABLE "Courier" ADD COLUMN IF NOT EXISTS "version" INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE "Courier" ADD COLUMN IF NOT EXISTS "originNodeId" TEXT;
+ALTER TABLE "Courier" ADD COLUMN IF NOT EXISTS "deletedAt" TIMESTAMP(3);
+ALTER TABLE "Courier" ADD COLUMN IF NOT EXISTS "deletedBy" TEXT;
+CREATE INDEX IF NOT EXISTS "Courier_deletedAt_idx" ON "Courier"("deletedAt");
+
+ALTER TABLE "CustomerType" ADD COLUMN IF NOT EXISTS "version" INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE "CustomerType" ADD COLUMN IF NOT EXISTS "originNodeId" TEXT;
+ALTER TABLE "CustomerType" ADD COLUMN IF NOT EXISTS "deletedAt" TIMESTAMP(3);
+ALTER TABLE "CustomerType" ADD COLUMN IF NOT EXISTS "deletedBy" TEXT;
+ALTER TABLE "CustomerType" ADD COLUMN IF NOT EXISTS "updatedAt" TIMESTAMP(3);
+UPDATE "CustomerType" SET "updatedAt" = COALESCE("updatedAt", CURRENT_TIMESTAMP) WHERE "updatedAt" IS NULL;
+ALTER TABLE "CustomerType" ALTER COLUMN "updatedAt" SET NOT NULL;
+ALTER TABLE "CustomerType" ALTER COLUMN "updatedAt" SET DEFAULT CURRENT_TIMESTAMP;
+CREATE INDEX IF NOT EXISTS "CustomerType_deletedAt_idx" ON "CustomerType"("deletedAt");
+
+ALTER TABLE "Department" ADD COLUMN IF NOT EXISTS "version" INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE "Department" ADD COLUMN IF NOT EXISTS "originNodeId" TEXT;
+ALTER TABLE "Department" ADD COLUMN IF NOT EXISTS "deletedAt" TIMESTAMP(3);
+ALTER TABLE "Department" ADD COLUMN IF NOT EXISTS "deletedBy" TEXT;
+ALTER TABLE "Department" ADD COLUMN IF NOT EXISTS "updatedAt" TIMESTAMP(3);
+UPDATE "Department" SET "updatedAt" = COALESCE("updatedAt", CURRENT_TIMESTAMP) WHERE "updatedAt" IS NULL;
+ALTER TABLE "Department" ALTER COLUMN "updatedAt" SET NOT NULL;
+ALTER TABLE "Department" ALTER COLUMN "updatedAt" SET DEFAULT CURRENT_TIMESTAMP;
+CREATE INDEX IF NOT EXISTS "Department_deletedAt_idx" ON "Department"("deletedAt");
+
+ALTER TABLE "DisciplinaryActionType" ADD COLUMN IF NOT EXISTS "version" INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE "DisciplinaryActionType" ADD COLUMN IF NOT EXISTS "originNodeId" TEXT;
+ALTER TABLE "DisciplinaryActionType" ADD COLUMN IF NOT EXISTS "deletedAt" TIMESTAMP(3);
+ALTER TABLE "DisciplinaryActionType" ADD COLUMN IF NOT EXISTS "deletedBy" TEXT;
+CREATE INDEX IF NOT EXISTS "DisciplinaryActionType_deletedAt_idx" ON "DisciplinaryActionType"("deletedAt");
+
+ALTER TABLE "EmployeeProfile" ADD COLUMN IF NOT EXISTS "version" INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE "EmployeeProfile" ADD COLUMN IF NOT EXISTS "originNodeId" TEXT;
+ALTER TABLE "EmployeeProfile" ADD COLUMN IF NOT EXISTS "deletedAt" TIMESTAMP(3);
+ALTER TABLE "EmployeeProfile" ADD COLUMN IF NOT EXISTS "deletedBy" TEXT;
+CREATE INDEX IF NOT EXISTS "EmployeeProfile_deletedAt_idx" ON "EmployeeProfile"("deletedAt");
+
+ALTER TABLE "EmployeeSalary" ADD COLUMN IF NOT EXISTS "version" INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE "EmployeeSalary" ADD COLUMN IF NOT EXISTS "originNodeId" TEXT;
+ALTER TABLE "EmployeeSalary" ADD COLUMN IF NOT EXISTS "deletedAt" TIMESTAMP(3);
+ALTER TABLE "EmployeeSalary" ADD COLUMN IF NOT EXISTS "deletedBy" TEXT;
+CREATE INDEX IF NOT EXISTS "EmployeeSalary_deletedAt_idx" ON "EmployeeSalary"("deletedAt");
+
+ALTER TABLE "EmployeeShift" ADD COLUMN IF NOT EXISTS "version" INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE "EmployeeShift" ADD COLUMN IF NOT EXISTS "originNodeId" TEXT;
+ALTER TABLE "EmployeeShift" ADD COLUMN IF NOT EXISTS "deletedAt" TIMESTAMP(3);
+ALTER TABLE "EmployeeShift" ADD COLUMN IF NOT EXISTS "deletedBy" TEXT;
+ALTER TABLE "EmployeeShift" ADD COLUMN IF NOT EXISTS "updatedAt" TIMESTAMP(3);
+UPDATE "EmployeeShift" SET "updatedAt" = COALESCE("updatedAt", CURRENT_TIMESTAMP) WHERE "updatedAt" IS NULL;
+ALTER TABLE "EmployeeShift" ALTER COLUMN "updatedAt" SET NOT NULL;
+ALTER TABLE "EmployeeShift" ALTER COLUMN "updatedAt" SET DEFAULT CURRENT_TIMESTAMP;
+CREATE INDEX IF NOT EXISTS "EmployeeShift_deletedAt_idx" ON "EmployeeShift"("deletedAt");
+
+ALTER TABLE "EmployeeShiftSchedule" ADD COLUMN IF NOT EXISTS "version" INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE "EmployeeShiftSchedule" ADD COLUMN IF NOT EXISTS "originNodeId" TEXT;
+ALTER TABLE "EmployeeShiftSchedule" ADD COLUMN IF NOT EXISTS "deletedAt" TIMESTAMP(3);
+ALTER TABLE "EmployeeShiftSchedule" ADD COLUMN IF NOT EXISTS "deletedBy" TEXT;
+ALTER TABLE "EmployeeShiftSchedule" ADD COLUMN IF NOT EXISTS "updatedAt" TIMESTAMP(3);
+UPDATE "EmployeeShiftSchedule" SET "updatedAt" = COALESCE("updatedAt", CURRENT_TIMESTAMP) WHERE "updatedAt" IS NULL;
+ALTER TABLE "EmployeeShiftSchedule" ALTER COLUMN "updatedAt" SET NOT NULL;
+ALTER TABLE "EmployeeShiftSchedule" ALTER COLUMN "updatedAt" SET DEFAULT CURRENT_TIMESTAMP;
+CREATE INDEX IF NOT EXISTS "EmployeeShiftSchedule_deletedAt_idx" ON "EmployeeShiftSchedule"("deletedAt");
+
+ALTER TABLE "EmployeeTag" ADD COLUMN IF NOT EXISTS "version" INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE "EmployeeTag" ADD COLUMN IF NOT EXISTS "originNodeId" TEXT;
+ALTER TABLE "EmployeeTag" ADD COLUMN IF NOT EXISTS "deletedAt" TIMESTAMP(3);
+ALTER TABLE "EmployeeTag" ADD COLUMN IF NOT EXISTS "deletedBy" TEXT;
+ALTER TABLE "EmployeeTag" ADD COLUMN IF NOT EXISTS "updatedAt" TIMESTAMP(3);
+UPDATE "EmployeeTag" SET "updatedAt" = COALESCE("updatedAt", CURRENT_TIMESTAMP) WHERE "updatedAt" IS NULL;
+ALTER TABLE "EmployeeTag" ALTER COLUMN "updatedAt" SET NOT NULL;
+ALTER TABLE "EmployeeTag" ALTER COLUMN "updatedAt" SET DEFAULT CURRENT_TIMESTAMP;
+CREATE INDEX IF NOT EXISTS "EmployeeTag_deletedAt_idx" ON "EmployeeTag"("deletedAt");
+
+ALTER TABLE "EmployeeTypeTag" ADD COLUMN IF NOT EXISTS "version" INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE "EmployeeTypeTag" ADD COLUMN IF NOT EXISTS "originNodeId" TEXT;
+ALTER TABLE "EmployeeTypeTag" ADD COLUMN IF NOT EXISTS "deletedAt" TIMESTAMP(3);
+ALTER TABLE "EmployeeTypeTag" ADD COLUMN IF NOT EXISTS "deletedBy" TEXT;
+ALTER TABLE "EmployeeTypeTag" ADD COLUMN IF NOT EXISTS "updatedAt" TIMESTAMP(3);
+UPDATE "EmployeeTypeTag" SET "updatedAt" = COALESCE("updatedAt", CURRENT_TIMESTAMP) WHERE "updatedAt" IS NULL;
+ALTER TABLE "EmployeeTypeTag" ALTER COLUMN "updatedAt" SET NOT NULL;
+ALTER TABLE "EmployeeTypeTag" ALTER COLUMN "updatedAt" SET DEFAULT CURRENT_TIMESTAMP;
+CREATE INDEX IF NOT EXISTS "EmployeeTypeTag_deletedAt_idx" ON "EmployeeTypeTag"("deletedAt");
+
+ALTER TABLE "GovernmentHoliday" ADD COLUMN IF NOT EXISTS "version" INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE "GovernmentHoliday" ADD COLUMN IF NOT EXISTS "originNodeId" TEXT;
+ALTER TABLE "GovernmentHoliday" ADD COLUMN IF NOT EXISTS "deletedAt" TIMESTAMP(3);
+ALTER TABLE "GovernmentHoliday" ADD COLUMN IF NOT EXISTS "deletedBy" TEXT;
+ALTER TABLE "GovernmentHoliday" ADD COLUMN IF NOT EXISTS "updatedAt" TIMESTAMP(3);
+UPDATE "GovernmentHoliday" SET "updatedAt" = COALESCE("updatedAt", CURRENT_TIMESTAMP) WHERE "updatedAt" IS NULL;
+ALTER TABLE "GovernmentHoliday" ALTER COLUMN "updatedAt" SET NOT NULL;
+ALTER TABLE "GovernmentHoliday" ALTER COLUMN "updatedAt" SET DEFAULT CURRENT_TIMESTAMP;
+CREATE INDEX IF NOT EXISTS "GovernmentHoliday_deletedAt_idx" ON "GovernmentHoliday"("deletedAt");
+
+ALTER TABLE "HelpdeskCategory" ADD COLUMN IF NOT EXISTS "version" INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE "HelpdeskCategory" ADD COLUMN IF NOT EXISTS "originNodeId" TEXT;
+ALTER TABLE "HelpdeskCategory" ADD COLUMN IF NOT EXISTS "deletedAt" TIMESTAMP(3);
+ALTER TABLE "HelpdeskCategory" ADD COLUMN IF NOT EXISTS "deletedBy" TEXT;
+ALTER TABLE "HelpdeskCategory" ADD COLUMN IF NOT EXISTS "updatedAt" TIMESTAMP(3);
+UPDATE "HelpdeskCategory" SET "updatedAt" = COALESCE("updatedAt", CURRENT_TIMESTAMP) WHERE "updatedAt" IS NULL;
+ALTER TABLE "HelpdeskCategory" ALTER COLUMN "updatedAt" SET NOT NULL;
+ALTER TABLE "HelpdeskCategory" ALTER COLUMN "updatedAt" SET DEFAULT CURRENT_TIMESTAMP;
+CREATE INDEX IF NOT EXISTS "HelpdeskCategory_deletedAt_idx" ON "HelpdeskCategory"("deletedAt");
+
+ALTER TABLE "HelpdeskFaq" ADD COLUMN IF NOT EXISTS "version" INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE "HelpdeskFaq" ADD COLUMN IF NOT EXISTS "originNodeId" TEXT;
+ALTER TABLE "HelpdeskFaq" ADD COLUMN IF NOT EXISTS "deletedAt" TIMESTAMP(3);
+ALTER TABLE "HelpdeskFaq" ADD COLUMN IF NOT EXISTS "deletedBy" TEXT;
+CREATE INDEX IF NOT EXISTS "HelpdeskFaq_deletedAt_idx" ON "HelpdeskFaq"("deletedAt");
+
+ALTER TABLE "HelpdeskFaqCategory" ADD COLUMN IF NOT EXISTS "version" INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE "HelpdeskFaqCategory" ADD COLUMN IF NOT EXISTS "originNodeId" TEXT;
+ALTER TABLE "HelpdeskFaqCategory" ADD COLUMN IF NOT EXISTS "deletedAt" TIMESTAMP(3);
+ALTER TABLE "HelpdeskFaqCategory" ADD COLUMN IF NOT EXISTS "deletedBy" TEXT;
+ALTER TABLE "HelpdeskFaqCategory" ADD COLUMN IF NOT EXISTS "updatedAt" TIMESTAMP(3);
+UPDATE "HelpdeskFaqCategory" SET "updatedAt" = COALESCE("updatedAt", "createdAt") WHERE "updatedAt" IS NULL;
+ALTER TABLE "HelpdeskFaqCategory" ALTER COLUMN "updatedAt" SET NOT NULL;
+ALTER TABLE "HelpdeskFaqCategory" ALTER COLUMN "updatedAt" SET DEFAULT CURRENT_TIMESTAMP;
+CREATE INDEX IF NOT EXISTS "HelpdeskFaqCategory_deletedAt_idx" ON "HelpdeskFaqCategory"("deletedAt");
+
+ALTER TABLE "Holiday" ADD COLUMN IF NOT EXISTS "version" INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE "Holiday" ADD COLUMN IF NOT EXISTS "originNodeId" TEXT;
+ALTER TABLE "Holiday" ADD COLUMN IF NOT EXISTS "deletedAt" TIMESTAMP(3);
+ALTER TABLE "Holiday" ADD COLUMN IF NOT EXISTS "deletedBy" TEXT;
+ALTER TABLE "Holiday" ADD COLUMN IF NOT EXISTS "updatedAt" TIMESTAMP(3);
+UPDATE "Holiday" SET "updatedAt" = COALESCE("updatedAt", "createdAt") WHERE "updatedAt" IS NULL;
+ALTER TABLE "Holiday" ALTER COLUMN "updatedAt" SET NOT NULL;
+ALTER TABLE "Holiday" ALTER COLUMN "updatedAt" SET DEFAULT CURRENT_TIMESTAMP;
+CREATE INDEX IF NOT EXISTS "Holiday_deletedAt_idx" ON "Holiday"("deletedAt");
+
+ALTER TABLE "InternalPolicy" ADD COLUMN IF NOT EXISTS "version" INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE "InternalPolicy" ADD COLUMN IF NOT EXISTS "originNodeId" TEXT;
+ALTER TABLE "InternalPolicy" ADD COLUMN IF NOT EXISTS "deletedAt" TIMESTAMP(3);
+ALTER TABLE "InternalPolicy" ADD COLUMN IF NOT EXISTS "deletedBy" TEXT;
+CREATE INDEX IF NOT EXISTS "InternalPolicy_deletedAt_idx" ON "InternalPolicy"("deletedAt");
+
+ALTER TABLE "LeadDealStage" ADD COLUMN IF NOT EXISTS "version" INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE "LeadDealStage" ADD COLUMN IF NOT EXISTS "originNodeId" TEXT;
+ALTER TABLE "LeadDealStage" ADD COLUMN IF NOT EXISTS "deletedAt" TIMESTAMP(3);
+ALTER TABLE "LeadDealStage" ADD COLUMN IF NOT EXISTS "deletedBy" TEXT;
+ALTER TABLE "LeadDealStage" ADD COLUMN IF NOT EXISTS "updatedAt" TIMESTAMP(3);
+UPDATE "LeadDealStage" SET "updatedAt" = COALESCE("updatedAt", CURRENT_TIMESTAMP) WHERE "updatedAt" IS NULL;
+ALTER TABLE "LeadDealStage" ALTER COLUMN "updatedAt" SET NOT NULL;
+ALTER TABLE "LeadDealStage" ALTER COLUMN "updatedAt" SET DEFAULT CURRENT_TIMESTAMP;
+CREATE INDEX IF NOT EXISTS "LeadDealStage_deletedAt_idx" ON "LeadDealStage"("deletedAt");
+
+ALTER TABLE "LeadSource" ADD COLUMN IF NOT EXISTS "version" INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE "LeadSource" ADD COLUMN IF NOT EXISTS "originNodeId" TEXT;
+ALTER TABLE "LeadSource" ADD COLUMN IF NOT EXISTS "deletedAt" TIMESTAMP(3);
+ALTER TABLE "LeadSource" ADD COLUMN IF NOT EXISTS "deletedBy" TEXT;
+ALTER TABLE "LeadSource" ADD COLUMN IF NOT EXISTS "updatedAt" TIMESTAMP(3);
+UPDATE "LeadSource" SET "updatedAt" = COALESCE("updatedAt", CURRENT_TIMESTAMP) WHERE "updatedAt" IS NULL;
+ALTER TABLE "LeadSource" ALTER COLUMN "updatedAt" SET NOT NULL;
+ALTER TABLE "LeadSource" ALTER COLUMN "updatedAt" SET DEFAULT CURRENT_TIMESTAMP;
+CREATE INDEX IF NOT EXISTS "LeadSource_deletedAt_idx" ON "LeadSource"("deletedAt");
+
+ALTER TABLE "LeadStage" ADD COLUMN IF NOT EXISTS "version" INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE "LeadStage" ADD COLUMN IF NOT EXISTS "originNodeId" TEXT;
+ALTER TABLE "LeadStage" ADD COLUMN IF NOT EXISTS "deletedAt" TIMESTAMP(3);
+ALTER TABLE "LeadStage" ADD COLUMN IF NOT EXISTS "deletedBy" TEXT;
+ALTER TABLE "LeadStage" ADD COLUMN IF NOT EXISTS "updatedAt" TIMESTAMP(3);
+UPDATE "LeadStage" SET "updatedAt" = COALESCE("updatedAt", CURRENT_TIMESTAMP) WHERE "updatedAt" IS NULL;
+ALTER TABLE "LeadStage" ALTER COLUMN "updatedAt" SET NOT NULL;
+ALTER TABLE "LeadStage" ALTER COLUMN "updatedAt" SET DEFAULT CURRENT_TIMESTAMP;
+CREATE INDEX IF NOT EXISTS "LeadStage_deletedAt_idx" ON "LeadStage"("deletedAt");
+
+ALTER TABLE "LeadTag" ADD COLUMN IF NOT EXISTS "version" INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE "LeadTag" ADD COLUMN IF NOT EXISTS "originNodeId" TEXT;
+ALTER TABLE "LeadTag" ADD COLUMN IF NOT EXISTS "deletedAt" TIMESTAMP(3);
+ALTER TABLE "LeadTag" ADD COLUMN IF NOT EXISTS "deletedBy" TEXT;
+ALTER TABLE "LeadTag" ADD COLUMN IF NOT EXISTS "updatedAt" TIMESTAMP(3);
+UPDATE "LeadTag" SET "updatedAt" = COALESCE("updatedAt", CURRENT_TIMESTAMP) WHERE "updatedAt" IS NULL;
+ALTER TABLE "LeadTag" ALTER COLUMN "updatedAt" SET NOT NULL;
+ALTER TABLE "LeadTag" ALTER COLUMN "updatedAt" SET DEFAULT CURRENT_TIMESTAMP;
+CREATE INDEX IF NOT EXISTS "LeadTag_deletedAt_idx" ON "LeadTag"("deletedAt");
+
+ALTER TABLE "LeaveType" ADD COLUMN IF NOT EXISTS "version" INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE "LeaveType" ADD COLUMN IF NOT EXISTS "originNodeId" TEXT;
+ALTER TABLE "LeaveType" ADD COLUMN IF NOT EXISTS "deletedAt" TIMESTAMP(3);
+ALTER TABLE "LeaveType" ADD COLUMN IF NOT EXISTS "deletedBy" TEXT;
+CREATE INDEX IF NOT EXISTS "LeaveType_deletedAt_idx" ON "LeaveType"("deletedAt");
+
+ALTER TABLE "LegalEntity" ADD COLUMN IF NOT EXISTS "version" INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE "LegalEntity" ADD COLUMN IF NOT EXISTS "originNodeId" TEXT;
+ALTER TABLE "LegalEntity" ADD COLUMN IF NOT EXISTS "deletedAt" TIMESTAMP(3);
+ALTER TABLE "LegalEntity" ADD COLUMN IF NOT EXISTS "deletedBy" TEXT;
+CREATE INDEX IF NOT EXISTS "LegalEntity_deletedAt_idx" ON "LegalEntity"("deletedAt");
+
+ALTER TABLE "Membership" ADD COLUMN IF NOT EXISTS "version" INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE "Membership" ADD COLUMN IF NOT EXISTS "originNodeId" TEXT;
+ALTER TABLE "Membership" ADD COLUMN IF NOT EXISTS "deletedAt" TIMESTAMP(3);
+ALTER TABLE "Membership" ADD COLUMN IF NOT EXISTS "deletedBy" TEXT;
+ALTER TABLE "Membership" ADD COLUMN IF NOT EXISTS "updatedAt" TIMESTAMP(3);
+UPDATE "Membership" SET "updatedAt" = COALESCE("updatedAt", CURRENT_TIMESTAMP) WHERE "updatedAt" IS NULL;
+ALTER TABLE "Membership" ALTER COLUMN "updatedAt" SET NOT NULL;
+ALTER TABLE "Membership" ALTER COLUMN "updatedAt" SET DEFAULT CURRENT_TIMESTAMP;
+CREATE INDEX IF NOT EXISTS "Membership_deletedAt_idx" ON "Membership"("deletedAt");
+
+ALTER TABLE "Organization" ADD COLUMN IF NOT EXISTS "version" INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE "Organization" ADD COLUMN IF NOT EXISTS "originNodeId" TEXT;
+ALTER TABLE "Organization" ADD COLUMN IF NOT EXISTS "deletedAt" TIMESTAMP(3);
+ALTER TABLE "Organization" ADD COLUMN IF NOT EXISTS "deletedBy" TEXT;
+CREATE INDEX IF NOT EXISTS "Organization_deletedAt_idx" ON "Organization"("deletedAt");
+
+ALTER TABLE "Party" ADD COLUMN IF NOT EXISTS "version" INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE "Party" ADD COLUMN IF NOT EXISTS "originNodeId" TEXT;
+ALTER TABLE "Party" ADD COLUMN IF NOT EXISTS "deletedAt" TIMESTAMP(3);
+ALTER TABLE "Party" ADD COLUMN IF NOT EXISTS "deletedBy" TEXT;
+CREATE INDEX IF NOT EXISTS "Party_deletedAt_idx" ON "Party"("deletedAt");
+
+ALTER TABLE "PartySite" ADD COLUMN IF NOT EXISTS "version" INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE "PartySite" ADD COLUMN IF NOT EXISTS "originNodeId" TEXT;
+ALTER TABLE "PartySite" ADD COLUMN IF NOT EXISTS "deletedAt" TIMESTAMP(3);
+ALTER TABLE "PartySite" ADD COLUMN IF NOT EXISTS "deletedBy" TEXT;
+CREATE INDEX IF NOT EXISTS "PartySite_deletedAt_idx" ON "PartySite"("deletedAt");
+
+ALTER TABLE "PaymentType" ADD COLUMN IF NOT EXISTS "version" INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE "PaymentType" ADD COLUMN IF NOT EXISTS "originNodeId" TEXT;
+ALTER TABLE "PaymentType" ADD COLUMN IF NOT EXISTS "deletedAt" TIMESTAMP(3);
+ALTER TABLE "PaymentType" ADD COLUMN IF NOT EXISTS "deletedBy" TEXT;
+ALTER TABLE "PaymentType" ADD COLUMN IF NOT EXISTS "updatedAt" TIMESTAMP(3);
+UPDATE "PaymentType" SET "updatedAt" = COALESCE("updatedAt", CURRENT_TIMESTAMP) WHERE "updatedAt" IS NULL;
+ALTER TABLE "PaymentType" ALTER COLUMN "updatedAt" SET NOT NULL;
+ALTER TABLE "PaymentType" ALTER COLUMN "updatedAt" SET DEFAULT CURRENT_TIMESTAMP;
+CREATE INDEX IF NOT EXISTS "PaymentType_deletedAt_idx" ON "PaymentType"("deletedAt");
+
+ALTER TABLE "Product" ADD COLUMN IF NOT EXISTS "version" INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE "Product" ADD COLUMN IF NOT EXISTS "originNodeId" TEXT;
+ALTER TABLE "Product" ADD COLUMN IF NOT EXISTS "deletedAt" TIMESTAMP(3);
+ALTER TABLE "Product" ADD COLUMN IF NOT EXISTS "deletedBy" TEXT;
+CREATE INDEX IF NOT EXISTS "Product_deletedAt_idx" ON "Product"("deletedAt");
+
+ALTER TABLE "ProductPrice" ADD COLUMN IF NOT EXISTS "version" INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE "ProductPrice" ADD COLUMN IF NOT EXISTS "originNodeId" TEXT;
+ALTER TABLE "ProductPrice" ADD COLUMN IF NOT EXISTS "deletedAt" TIMESTAMP(3);
+ALTER TABLE "ProductPrice" ADD COLUMN IF NOT EXISTS "deletedBy" TEXT;
+ALTER TABLE "ProductPrice" ADD COLUMN IF NOT EXISTS "updatedAt" TIMESTAMP(3);
+UPDATE "ProductPrice" SET "updatedAt" = COALESCE("updatedAt", CURRENT_TIMESTAMP) WHERE "updatedAt" IS NULL;
+ALTER TABLE "ProductPrice" ALTER COLUMN "updatedAt" SET NOT NULL;
+ALTER TABLE "ProductPrice" ALTER COLUMN "updatedAt" SET DEFAULT CURRENT_TIMESTAMP;
+CREATE INDEX IF NOT EXISTS "ProductPrice_deletedAt_idx" ON "ProductPrice"("deletedAt");
+
+ALTER TABLE "ReportingAssignment" ADD COLUMN IF NOT EXISTS "version" INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE "ReportingAssignment" ADD COLUMN IF NOT EXISTS "originNodeId" TEXT;
+ALTER TABLE "ReportingAssignment" ADD COLUMN IF NOT EXISTS "deletedAt" TIMESTAMP(3);
+ALTER TABLE "ReportingAssignment" ADD COLUMN IF NOT EXISTS "deletedBy" TEXT;
+ALTER TABLE "ReportingAssignment" ADD COLUMN IF NOT EXISTS "updatedAt" TIMESTAMP(3);
+UPDATE "ReportingAssignment" SET "updatedAt" = COALESCE("updatedAt", "createdAt") WHERE "updatedAt" IS NULL;
+ALTER TABLE "ReportingAssignment" ALTER COLUMN "updatedAt" SET NOT NULL;
+ALTER TABLE "ReportingAssignment" ALTER COLUMN "updatedAt" SET DEFAULT CURRENT_TIMESTAMP;
+CREATE INDEX IF NOT EXISTS "ReportingAssignment_deletedAt_idx" ON "ReportingAssignment"("deletedAt");
+
+ALTER TABLE "RestrictedLeavePeriod" ADD COLUMN IF NOT EXISTS "version" INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE "RestrictedLeavePeriod" ADD COLUMN IF NOT EXISTS "originNodeId" TEXT;
+ALTER TABLE "RestrictedLeavePeriod" ADD COLUMN IF NOT EXISTS "deletedAt" TIMESTAMP(3);
+ALTER TABLE "RestrictedLeavePeriod" ADD COLUMN IF NOT EXISTS "deletedBy" TEXT;
+ALTER TABLE "RestrictedLeavePeriod" ADD COLUMN IF NOT EXISTS "updatedAt" TIMESTAMP(3);
+UPDATE "RestrictedLeavePeriod" SET "updatedAt" = COALESCE("updatedAt", "createdAt") WHERE "updatedAt" IS NULL;
+ALTER TABLE "RestrictedLeavePeriod" ALTER COLUMN "updatedAt" SET NOT NULL;
+ALTER TABLE "RestrictedLeavePeriod" ALTER COLUMN "updatedAt" SET DEFAULT CURRENT_TIMESTAMP;
+CREATE INDEX IF NOT EXISTS "RestrictedLeavePeriod_deletedAt_idx" ON "RestrictedLeavePeriod"("deletedAt");
+
+ALTER TABLE "SalaryComponent" ADD COLUMN IF NOT EXISTS "version" INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE "SalaryComponent" ADD COLUMN IF NOT EXISTS "originNodeId" TEXT;
+ALTER TABLE "SalaryComponent" ADD COLUMN IF NOT EXISTS "deletedAt" TIMESTAMP(3);
+ALTER TABLE "SalaryComponent" ADD COLUMN IF NOT EXISTS "deletedBy" TEXT;
+ALTER TABLE "SalaryComponent" ADD COLUMN IF NOT EXISTS "updatedAt" TIMESTAMP(3);
+UPDATE "SalaryComponent" SET "updatedAt" = COALESCE("updatedAt", CURRENT_TIMESTAMP) WHERE "updatedAt" IS NULL;
+ALTER TABLE "SalaryComponent" ALTER COLUMN "updatedAt" SET NOT NULL;
+ALTER TABLE "SalaryComponent" ALTER COLUMN "updatedAt" SET DEFAULT CURRENT_TIMESTAMP;
+CREATE INDEX IF NOT EXISTS "SalaryComponent_deletedAt_idx" ON "SalaryComponent"("deletedAt");
+
+ALTER TABLE "SalaryComponentCondition" ADD COLUMN IF NOT EXISTS "version" INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE "SalaryComponentCondition" ADD COLUMN IF NOT EXISTS "originNodeId" TEXT;
+ALTER TABLE "SalaryComponentCondition" ADD COLUMN IF NOT EXISTS "deletedAt" TIMESTAMP(3);
+ALTER TABLE "SalaryComponentCondition" ADD COLUMN IF NOT EXISTS "deletedBy" TEXT;
+ALTER TABLE "SalaryComponentCondition" ADD COLUMN IF NOT EXISTS "updatedAt" TIMESTAMP(3);
+UPDATE "SalaryComponentCondition" SET "updatedAt" = COALESCE("updatedAt", CURRENT_TIMESTAMP) WHERE "updatedAt" IS NULL;
+ALTER TABLE "SalaryComponentCondition" ALTER COLUMN "updatedAt" SET NOT NULL;
+ALTER TABLE "SalaryComponentCondition" ALTER COLUMN "updatedAt" SET DEFAULT CURRENT_TIMESTAMP;
+CREATE INDEX IF NOT EXISTS "SalaryComponentCondition_deletedAt_idx" ON "SalaryComponentCondition"("deletedAt");
+
+ALTER TABLE "SalaryContract" ADD COLUMN IF NOT EXISTS "version" INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE "SalaryContract" ADD COLUMN IF NOT EXISTS "originNodeId" TEXT;
+ALTER TABLE "SalaryContract" ADD COLUMN IF NOT EXISTS "deletedAt" TIMESTAMP(3);
+ALTER TABLE "SalaryContract" ADD COLUMN IF NOT EXISTS "deletedBy" TEXT;
+CREATE INDEX IF NOT EXISTS "SalaryContract_deletedAt_idx" ON "SalaryContract"("deletedAt");
+
+ALTER TABLE "SkillZone" ADD COLUMN IF NOT EXISTS "version" INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE "SkillZone" ADD COLUMN IF NOT EXISTS "originNodeId" TEXT;
+ALTER TABLE "SkillZone" ADD COLUMN IF NOT EXISTS "deletedAt" TIMESTAMP(3);
+ALTER TABLE "SkillZone" ADD COLUMN IF NOT EXISTS "deletedBy" TEXT;
+ALTER TABLE "SkillZone" ADD COLUMN IF NOT EXISTS "updatedAt" TIMESTAMP(3);
+UPDATE "SkillZone" SET "updatedAt" = COALESCE("updatedAt", "createdAt") WHERE "updatedAt" IS NULL;
+ALTER TABLE "SkillZone" ALTER COLUMN "updatedAt" SET NOT NULL;
+ALTER TABLE "SkillZone" ALTER COLUMN "updatedAt" SET DEFAULT CURRENT_TIMESTAMP;
+CREATE INDEX IF NOT EXISTS "SkillZone_deletedAt_idx" ON "SkillZone"("deletedAt");
+
+ALTER TABLE "StaffChecklistItem" ADD COLUMN IF NOT EXISTS "version" INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE "StaffChecklistItem" ADD COLUMN IF NOT EXISTS "originNodeId" TEXT;
+ALTER TABLE "StaffChecklistItem" ADD COLUMN IF NOT EXISTS "deletedAt" TIMESTAMP(3);
+ALTER TABLE "StaffChecklistItem" ADD COLUMN IF NOT EXISTS "deletedBy" TEXT;
+CREATE INDEX IF NOT EXISTS "StaffChecklistItem_deletedAt_idx" ON "StaffChecklistItem"("deletedAt");
+
+ALTER TABLE "StockLot" ADD COLUMN IF NOT EXISTS "version" INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE "StockLot" ADD COLUMN IF NOT EXISTS "originNodeId" TEXT;
+ALTER TABLE "StockLot" ADD COLUMN IF NOT EXISTS "deletedAt" TIMESTAMP(3);
+ALTER TABLE "StockLot" ADD COLUMN IF NOT EXISTS "deletedBy" TEXT;
+ALTER TABLE "StockLot" ADD COLUMN IF NOT EXISTS "updatedAt" TIMESTAMP(3);
+UPDATE "StockLot" SET "updatedAt" = COALESCE("updatedAt", "createdAt") WHERE "updatedAt" IS NULL;
+ALTER TABLE "StockLot" ALTER COLUMN "updatedAt" SET NOT NULL;
+ALTER TABLE "StockLot" ALTER COLUMN "updatedAt" SET DEFAULT CURRENT_TIMESTAMP;
+CREATE INDEX IF NOT EXISTS "StockLot_deletedAt_idx" ON "StockLot"("deletedAt");
+
+ALTER TABLE "StockUnit" ADD COLUMN IF NOT EXISTS "version" INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE "StockUnit" ADD COLUMN IF NOT EXISTS "originNodeId" TEXT;
+ALTER TABLE "StockUnit" ADD COLUMN IF NOT EXISTS "deletedAt" TIMESTAMP(3);
+ALTER TABLE "StockUnit" ADD COLUMN IF NOT EXISTS "deletedBy" TEXT;
+CREATE INDEX IF NOT EXISTS "StockUnit_deletedAt_idx" ON "StockUnit"("deletedAt");
+
+ALTER TABLE "Store" ADD COLUMN IF NOT EXISTS "version" INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE "Store" ADD COLUMN IF NOT EXISTS "originNodeId" TEXT;
+ALTER TABLE "Store" ADD COLUMN IF NOT EXISTS "deletedAt" TIMESTAMP(3);
+ALTER TABLE "Store" ADD COLUMN IF NOT EXISTS "deletedBy" TEXT;
+CREATE INDEX IF NOT EXISTS "Store_deletedAt_idx" ON "Store"("deletedAt");
+
+ALTER TABLE "TaxRate" ADD COLUMN IF NOT EXISTS "version" INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE "TaxRate" ADD COLUMN IF NOT EXISTS "originNodeId" TEXT;
+ALTER TABLE "TaxRate" ADD COLUMN IF NOT EXISTS "deletedAt" TIMESTAMP(3);
+ALTER TABLE "TaxRate" ADD COLUMN IF NOT EXISTS "deletedBy" TEXT;
+ALTER TABLE "TaxRate" ADD COLUMN IF NOT EXISTS "updatedAt" TIMESTAMP(3);
+UPDATE "TaxRate" SET "updatedAt" = COALESCE("updatedAt", CURRENT_TIMESTAMP) WHERE "updatedAt" IS NULL;
+ALTER TABLE "TaxRate" ALTER COLUMN "updatedAt" SET NOT NULL;
+ALTER TABLE "TaxRate" ALTER COLUMN "updatedAt" SET DEFAULT CURRENT_TIMESTAMP;
+CREATE INDEX IF NOT EXISTS "TaxRate_deletedAt_idx" ON "TaxRate"("deletedAt");
+
+ALTER TABLE "TaxType" ADD COLUMN IF NOT EXISTS "version" INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE "TaxType" ADD COLUMN IF NOT EXISTS "originNodeId" TEXT;
+ALTER TABLE "TaxType" ADD COLUMN IF NOT EXISTS "deletedAt" TIMESTAMP(3);
+ALTER TABLE "TaxType" ADD COLUMN IF NOT EXISTS "deletedBy" TEXT;
+ALTER TABLE "TaxType" ADD COLUMN IF NOT EXISTS "updatedAt" TIMESTAMP(3);
+UPDATE "TaxType" SET "updatedAt" = COALESCE("updatedAt", CURRENT_TIMESTAMP) WHERE "updatedAt" IS NULL;
+ALTER TABLE "TaxType" ALTER COLUMN "updatedAt" SET NOT NULL;
+ALTER TABLE "TaxType" ALTER COLUMN "updatedAt" SET DEFAULT CURRENT_TIMESTAMP;
+CREATE INDEX IF NOT EXISTS "TaxType_deletedAt_idx" ON "TaxType"("deletedAt");
+
+ALTER TABLE "TncTemplate" ADD COLUMN IF NOT EXISTS "version" INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE "TncTemplate" ADD COLUMN IF NOT EXISTS "originNodeId" TEXT;
+ALTER TABLE "TncTemplate" ADD COLUMN IF NOT EXISTS "deletedAt" TIMESTAMP(3);
+ALTER TABLE "TncTemplate" ADD COLUMN IF NOT EXISTS "deletedBy" TEXT;
+ALTER TABLE "TncTemplate" ADD COLUMN IF NOT EXISTS "updatedAt" TIMESTAMP(3);
+UPDATE "TncTemplate" SET "updatedAt" = COALESCE("updatedAt", CURRENT_TIMESTAMP) WHERE "updatedAt" IS NULL;
+ALTER TABLE "TncTemplate" ALTER COLUMN "updatedAt" SET NOT NULL;
+ALTER TABLE "TncTemplate" ALTER COLUMN "updatedAt" SET DEFAULT CURRENT_TIMESTAMP;
+CREATE INDEX IF NOT EXISTS "TncTemplate_deletedAt_idx" ON "TncTemplate"("deletedAt");
+
+ALTER TABLE "User" ADD COLUMN IF NOT EXISTS "version" INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE "User" ADD COLUMN IF NOT EXISTS "originNodeId" TEXT;
+ALTER TABLE "User" ADD COLUMN IF NOT EXISTS "deletedAt" TIMESTAMP(3);
+ALTER TABLE "User" ADD COLUMN IF NOT EXISTS "deletedBy" TEXT;
+CREATE INDEX IF NOT EXISTS "User_deletedAt_idx" ON "User"("deletedAt");
+
+ALTER TABLE "UserStoreRole" ADD COLUMN IF NOT EXISTS "version" INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE "UserStoreRole" ADD COLUMN IF NOT EXISTS "originNodeId" TEXT;
+ALTER TABLE "UserStoreRole" ADD COLUMN IF NOT EXISTS "deletedAt" TIMESTAMP(3);
+ALTER TABLE "UserStoreRole" ADD COLUMN IF NOT EXISTS "deletedBy" TEXT;
+ALTER TABLE "UserStoreRole" ADD COLUMN IF NOT EXISTS "updatedAt" TIMESTAMP(3);
+UPDATE "UserStoreRole" SET "updatedAt" = COALESCE("updatedAt", CURRENT_TIMESTAMP) WHERE "updatedAt" IS NULL;
+ALTER TABLE "UserStoreRole" ALTER COLUMN "updatedAt" SET NOT NULL;
+ALTER TABLE "UserStoreRole" ALTER COLUMN "updatedAt" SET DEFAULT CURRENT_TIMESTAMP;
+CREATE INDEX IF NOT EXISTS "UserStoreRole_deletedAt_idx" ON "UserStoreRole"("deletedAt");
+
+ALTER TABLE "UserTarget" ADD COLUMN IF NOT EXISTS "version" INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE "UserTarget" ADD COLUMN IF NOT EXISTS "originNodeId" TEXT;
+ALTER TABLE "UserTarget" ADD COLUMN IF NOT EXISTS "deletedAt" TIMESTAMP(3);
+ALTER TABLE "UserTarget" ADD COLUMN IF NOT EXISTS "deletedBy" TEXT;
+CREATE INDEX IF NOT EXISTS "UserTarget_deletedAt_idx" ON "UserTarget"("deletedAt");
+
+ALTER TABLE "Warehouse" ADD COLUMN IF NOT EXISTS "version" INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE "Warehouse" ADD COLUMN IF NOT EXISTS "originNodeId" TEXT;
+ALTER TABLE "Warehouse" ADD COLUMN IF NOT EXISTS "deletedAt" TIMESTAMP(3);
+ALTER TABLE "Warehouse" ADD COLUMN IF NOT EXISTS "deletedBy" TEXT;
+ALTER TABLE "Warehouse" ADD COLUMN IF NOT EXISTS "updatedAt" TIMESTAMP(3);
+UPDATE "Warehouse" SET "updatedAt" = COALESCE("updatedAt", CURRENT_TIMESTAMP) WHERE "updatedAt" IS NULL;
+ALTER TABLE "Warehouse" ALTER COLUMN "updatedAt" SET NOT NULL;
+ALTER TABLE "Warehouse" ALTER COLUMN "updatedAt" SET DEFAULT CURRENT_TIMESTAMP;
+CREATE INDEX IF NOT EXISTS "Warehouse_deletedAt_idx" ON "Warehouse"("deletedAt");
+
+ALTER TABLE "WorkType" ADD COLUMN IF NOT EXISTS "version" INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE "WorkType" ADD COLUMN IF NOT EXISTS "originNodeId" TEXT;
+ALTER TABLE "WorkType" ADD COLUMN IF NOT EXISTS "deletedAt" TIMESTAMP(3);
+ALTER TABLE "WorkType" ADD COLUMN IF NOT EXISTS "deletedBy" TEXT;
+ALTER TABLE "WorkType" ADD COLUMN IF NOT EXISTS "updatedAt" TIMESTAMP(3);
+UPDATE "WorkType" SET "updatedAt" = COALESCE("updatedAt", CURRENT_TIMESTAMP) WHERE "updatedAt" IS NULL;
+ALTER TABLE "WorkType" ALTER COLUMN "updatedAt" SET NOT NULL;
+ALTER TABLE "WorkType" ALTER COLUMN "updatedAt" SET DEFAULT CURRENT_TIMESTAMP;
+CREATE INDEX IF NOT EXISTS "WorkType_deletedAt_idx" ON "WorkType"("deletedAt");
