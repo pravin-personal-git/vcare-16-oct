@@ -7,6 +7,9 @@ export const alt = 'Vcare - Business Operating System';
 export const size = { width: 1200, height: 630 };
 export const contentType = 'image/png';
 
+/* The share picture is a PNG drawn on the server - CSS theme tokens do not
+   reach it, so its two colours are fixed (Vcare's white and ink). */
+/* eslint-disable no-restricted-syntax */
 export default async function OpengraphImage() {
   const logo = await readFile(join(process.cwd(), 'public', 'vcare-logo.png'));
   const src = `data:image/png;base64,${logo.toString('base64')}`;
