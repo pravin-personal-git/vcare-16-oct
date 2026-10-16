@@ -7,6 +7,7 @@ import { useTheme } from '@/theme/ThemeProvider';
 import { Button, Text } from './ui';
 import { Icon } from './Icon';
 import { radius, space } from '@/theme/tokens';
+import { shrinkPhoto } from '@/lib/shrink';
 
 /**
  * The camera, in two modes: reading a barcode / QR / serial label (`code`),
@@ -59,7 +60,11 @@ export function Scanner({ visible, mode, title, continuous = false, facing = 'ba
     setBusy(true);
     try {
       const pic = await cam.current.takePictureAsync({ base64: true, quality, skipProcessing: false });
-      if (pic?.base64) { onPhoto?.(pic.base64, pic.uri); onClose(); }
+      // Made small before anyone gets it (16 Oct 2026) - a full-size photo can be
+      // over the website's 4.5 MB limit; if shrinking fails, the original goes.
+      const small = pic?.uri ? await shrinkPhoto(pic.uri, { base64: true }) : null;
+      const base64 = small?.base64 ?? pic?.base64;
+      if (base64) { onPhoto?.(base64, small?.uri ?? pic?.uri); onClose(); }
     } finally {
       setBusy(false);
     }

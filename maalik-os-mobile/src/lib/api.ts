@@ -291,6 +291,7 @@ export async function authedUpload<T>(path: string, form: FormData): Promise<T |
     clearTimeout(timer);
   }
   const json = (await res.json().catch(() => ({}))) as T & { error?: string; code?: string };
+  if (res.status === 413) throw new ApiError('This file is too large to send (the limit is 4 MB).', 413);
   if (!res.ok) throw new ApiError(json.error ?? 'Something went wrong. Please try again.', res.status, json.code);
   return json;
 }

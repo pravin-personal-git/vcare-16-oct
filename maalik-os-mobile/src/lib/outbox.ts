@@ -103,6 +103,8 @@ export function flushOutbox(): Promise<void> {
 export const waiting = async (target?: string) => (await read<OutboxItem>(QUEUE)).filter((x) => !target || x.target === target);
 export const refused = () => read<Refused>(REFUSED);
 export const clearRefused = () => write(REFUSED, []);
+/** Record something the server would not take (uploads use it too), shown in Waiting to send. */
+export const noteRefused = async (r: Refused) => write(REFUSED, [...await read<Refused>(REFUSED), r]);
 
 // ------------------------------------------------------------- the badge
 

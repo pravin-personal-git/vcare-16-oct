@@ -705,5 +705,6 @@
   "Shop request picked up": "दुकान की माँग ली गई",
   "Clear search": "खोज साफ़ करें",
   "Remove this item": "यह आइटम हटाएँ",
-  "One less": "एक कम"
+  "One less": "एक कम",
+  "This file is too large to send (the limit is 4 MB).": "यह फ़ाइल भेजने के लिए बहुत बड़ी है (सीमा 4 MB है)।"
 }

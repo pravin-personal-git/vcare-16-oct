@@ -15,6 +15,13 @@ import { jobFiles, pendingUploads, uploadJobFile, type JobDoc, type JobFile } fr
 import { radius, space } from '@/theme/tokens';
 
 /**
+ * Voice notes recorded for speech, not music (16 Oct 2026): one channel at
+ * 32 kbps is about 0.25 MB a minute, so even a long note stays far under the
+ * 4 MB upload limit. HIGH_QUALITY (stereo 128 kbps) passed it after 4 minutes.
+ */
+const VOICE = { ...RecordingPresets.HIGH_QUALITY, sampleRate: 22050, numberOfChannels: 1, bitRate: 32000 };
+
+/**
  * Photo and voice note on a job (13 Oct 2026, decisions 5 and 6): two big
  * buttons, and what is already on the job underneath. A voice note is the
  * technician's "what I did" without typing - recorded here, saved on the job
@@ -29,7 +36,7 @@ export function JobMedia({ docType, docId, photo = true, voice = true }: { docTy
   const [msg, setMsg] = useState<{ tone: 'success' | 'warning' | 'danger'; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
+  const recorder = useAudioRecorder(VOICE);
   const rec = useAudioRecorderState(recorder, 500);
   const player = useRef<AudioPlayer | null>(null);
   const [playing, setPlaying] = useState<string | null>(null);

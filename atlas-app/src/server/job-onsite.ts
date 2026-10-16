@@ -8,6 +8,7 @@ import { metresBetween } from '@/lib/shift';
 import { customerLabel, findTransition, siteGate, transitionError, type JobActor } from '@/lib/job-flow';
 import { assertActionAllowed } from './flow-gate';
 import { jobEvent } from './job-notify';
+import { newSiteName, planOverrideSite } from '@/lib/override-site';
 
 /**
  * The technician's field steps (workflow slice 3, spec §4.1-4.3):
@@ -193,6 +194,10 @@ export async function decideSiteOverride(
   await db.siteOverride.update({ where: { id: row.id }, data: { status: final, decidedBy: userId, decidedAt: new Date(), decisionNote: note?.trim() || null } });
   await jobEvent(row.complaintId, 'override_decided', final);
 
+  // The place he asked from becomes the job's site (16 Oct 2026) - before
+  // arriving, so the job has its location from then on. Never blocks the approval.
+  if (final === 'approved') await siteFromOverride(row, userId).catch((e) => console.error('[override-site]', e));
+
   const job = await loadJob(scope, row.complaintId);
   if (!job) return;
   if (final === 'approved' && findTransition(job.status, 'on_site', 'approver')) {
@@ -201,6 +206,59 @@ export async function decideSiteOverride(
   } else {
     await logActivity(db, row.complaintId, 'override', userId, { body: `Location override ${final}${note?.trim() ? `: ${note.trim()}` : ''}.` });
   }
+}
+
+/**
+ * An approved override on a job with no location: the technician's reading
+ * becomes the job's site - a saved site of this customer within 25 m is
+ * reused, a site with no location gets this one, otherwise a new site is made
+ * (lib/override-site). What happened is written on the job.
+ */
+async function siteFromOverride(
+  row: { complaintId: string; storeId: string; requestedBy: string; lat: unknown; lng: unknown; accuracyM: number | null; createdAt: Date },
+  userId: string,
+) {
+  const job = await db.complaint.findUnique({
+    where: { id: row.complaintId },
+    select: { id: true, storeId: true, customerId: true, siteLat: true, siteLng: true, site: { select: { id: true, latitude: true, longitude: true } } },
+  });
+  if (!job) return;
+  const num = (v: unknown) => (v === null || v === undefined ? null : Number(v));
+  const reading = num(row.lat) !== null && num(row.lng) !== null ? { lat: num(row.lat)!, lng: num(row.lng)!, accuracyM: row.accuracyM } : null;
+  const sites = job.site ? [] : await db.partySite.findMany({
+    where: { storeId: job.storeId, partyId: job.customerId, isActive: true, deletedAt: null, latitude: { not: null }, longitude: { not: null } },
+    select: { id: true, latitude: true, longitude: true },
+  });
+  const plan = planOverrideSite({
+    jobHasLocation: job.siteLat !== null && job.siteLng !== null,
+    jobSite: job.site ? { id: job.site.id, lat: num(job.site.latitude), lng: num(job.site.longitude) } : null,
+    reading,
+    customerSites: sites.map((s) => ({ id: s.id, lat: num(s.latitude), lng: num(s.longitude) })),
+  });
+
+  if (plan.kind === 'none') {
+    if (plan.reason === 'poor_accuracy') {
+      await logActivity(db, job.id, 'override', userId, { body: `Site location not saved: the phone's GPS was too rough (±${row.accuracyM} m).` });
+    }
+    return;
+  }
+  await db.$transaction(async (tx) => {
+    if (plan.kind === 'fill_site') {
+      await tx.partySite.update({ where: { id: plan.siteId }, data: { latitude: reading!.lat, longitude: reading!.lng } });
+      await tx.complaint.update({ where: { id: job.id }, data: { siteLat: reading!.lat, siteLng: reading!.lng } });
+      await logActivity(tx, job.id, 'override', userId, { body: "The job's site had no location - saved from where the technician asked." });
+    } else if (plan.kind === 'reuse_site') {
+      const site = await tx.partySite.findUnique({ where: { id: plan.siteId }, select: { name: true } });
+      await tx.complaint.update({ where: { id: job.id }, data: { siteId: plan.siteId, siteLat: plan.lat, siteLng: plan.lng } });
+      await logActivity(tx, job.id, 'override', userId, { body: `Linked to the saved site "${site?.name ?? 'site'}" (${plan.distanceM} m from where the technician asked) - no new site made.` });
+    } else {
+      const who = await tx.user.findUnique({ where: { id: row.requestedBy }, select: { fullName: true } });
+      const name = newSiteName(row.createdAt, who?.fullName ?? null);
+      const site = await tx.partySite.create({ data: { storeId: job.storeId, partyId: job.customerId, name, latitude: reading!.lat, longitude: reading!.lng } });
+      await tx.complaint.update({ where: { id: job.id }, data: { siteId: site.id, siteLat: reading!.lat, siteLng: reading!.lng } });
+      await logActivity(tx, job.id, 'override', userId, { body: `New site "${name}" saved from where the technician asked. Rename it on the customer if needed.` });
+    }
+  });
 }
 
 /** Leaving site (to fetch parts, next day…): time on site is added up, the job goes back to In progress. */
