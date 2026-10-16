@@ -1,8 +1,8 @@
 {
   "expo": {
     "name": "Vcare",
-    "slug": "malikos",
-    "version": "1.0.28",
+    "slug": "ns-vcare-app",
+    "version": "1.0.29",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
@@ -18,7 +18,7 @@
       },
       "predictiveBackGestureEnabled": false,
       "package": "com.nairsolutions.maalikos",
-      "versionCode": 30,
+      "versionCode": 31,
       "permissions": [
         "android.permission.READ_CALL_LOG",
         "android.permission.POST_NOTIFICATIONS"
@@ -96,13 +96,13 @@
       "typedRoutes": true
     },
     "extra": {
-      "apiBaseUrl": "https://atlas.nairsolutions.org",
+      "apiBaseUrl": "https://app.vcarebgsgroup.in",
       "otpLaunchDate": "2026-12-01",
       "router": {},
       "eas": {
-        "projectId": "04b63902-b57f-48ed-8282-6cb3878debdc"
+        "projectId": "5318d4d1-85a5-4e89-80ca-7ffdbb799497"
       }
     },
-    "owner": "nairsolutions"
+    "owner": "ns-vcare-app"
   }
 }

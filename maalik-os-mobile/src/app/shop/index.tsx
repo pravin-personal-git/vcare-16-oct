@@ -23,7 +23,7 @@ export default function PickShop() {
   return (
     <SubScreen title={t('Browse a shop')} subtitle={t('No account needed to look around.')}>
       <Text color={c.inkSoft}>
-        {t('Type the shop name the business gave you. It is the last part of their shop link, like "vcare" in atlas.nairsolutions.org/shop/vcare.')}
+        {t('Type the shop name the business gave you. It is the last part of their shop link, like "vcare" in app.vcarebgsgroup.in/shop/vcare.')}
       </Text>
       <Field
         label={t('Shop name')}
