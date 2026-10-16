@@ -10,8 +10,15 @@ import { readUiPrefs } from '@/lib/ui-prefs';
 import { HindiTranslator } from '@/components/shell/HindiTranslator';
 
 export const metadata: Metadata = {
-  title: 'Atlas - Business Operating System',
+  metadataBase: new URL(process.env.NEXT_PUBLIC_APP_URL || 'https://app.vcarebgsgroup.in'),
+  title: 'Vcare - Business Operating System',
   description: 'Run your entire business from one platform',
+  openGraph: {
+    title: 'Vcare - Business Operating System',
+    description: 'Run your entire business from one platform',
+    siteName: 'Vcare',
+    type: 'website',
+  },
 };
 
 export default async function RootLayout({

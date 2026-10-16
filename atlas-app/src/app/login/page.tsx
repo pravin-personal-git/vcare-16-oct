@@ -20,7 +20,7 @@ export default async function LoginPage() {
   // on one database the page stays generic rather than guess.
   const orgs = await db.organization.findMany({ select: { name: true, logoPath: true }, take: 2 }).catch(() => []);
   const org = orgs.length === 1 ? orgs[0] : null;
-  const logo = org ? publicBrandUrl(org.logoPath) : null;
+  const logo = (org ? publicBrandUrl(org.logoPath) : null) ?? '/vcare-mark.png';
 
   return (
     <main className="grid min-h-screen bg-card lg:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)]">
@@ -33,11 +33,11 @@ export default async function LoginPage() {
               <img src={logo} alt="" className="h-11 w-11 rounded-xl object-contain" />
             ) : (
               <span className="btn-depth grid h-11 w-11 place-items-center rounded-xl bg-brand text-lg font-black text-brand-fg">
-                {(org?.name ?? 'Atlas').charAt(0).toUpperCase()}
+                {(org?.name ?? 'Vcare').charAt(0).toUpperCase()}
               </span>
             )}
             <div>
-              <p className="text-lg font-extrabold leading-tight text-navy">{org?.name ?? 'Atlas'}</p>
+              <p className="text-lg font-extrabold leading-tight text-navy">{org?.name ?? 'Vcare'}</p>
               <p className="text-micro uppercase text-muted-foreground">
                 {org ? 'Staff sign-in' : 'Business Operating System'}
               </p>
