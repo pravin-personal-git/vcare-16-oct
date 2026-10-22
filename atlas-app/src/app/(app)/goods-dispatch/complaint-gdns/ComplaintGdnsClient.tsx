@@ -1,6 +1,7 @@
 'use client';
 
 import { CustomerLink } from '@/components/document/CustomerLink';
+import { SerialLinks } from '@/components/document/SerialLink';
 import { newestFirst, oldestFirst } from '@/lib/card-list';
 import Link from 'next/link';
 import { useState } from 'react';
@@ -45,7 +46,7 @@ export interface ComplaintGdnVM {
   challanNo: string;
   type: string;
   issuedByName: string | null;
-  lines: { productName: string; issued: number; returned: number; pending: number; used: number }[];
+  lines: { productName: string; issued: number; returned: number; pending: number; used: number; units?: { id: string; serialNo: string }[] }[];
 }
 
 const when = (d: string) =>
@@ -109,6 +110,7 @@ export function ComplaintGdnsClient({ rows, highlight }: {
             r.gdnNo, r.complaintNo, r.customerName, r.challanNo,
             TYPE[r.type] ?? r.type,
             ...r.lines.map((l) => l.productName),
+            ...r.lines.flatMap((l) => (l.units ?? []).map((u) => u.serialNo)),
           ]}
           chipLabel="Type"
           chipOf={chipOf}
@@ -184,6 +186,7 @@ export function ComplaintGdnsClient({ rows, highlight }: {
                               <span className="tabular-nums">
                                 {l.issued} · {l.returned}{l.pending ? ` (+${l.pending} coming)` : ''} · <strong>{l.used}</strong>
                               </span>
+                              {(l.units ?? []).length > 0 && <> <SerialLinks units={l.units ?? []} /></>}
                             </span>
                           ))}
                         </td>

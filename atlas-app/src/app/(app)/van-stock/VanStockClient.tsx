@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/Button';
 import { Icon } from '@/components/ui/Icon';
 import { Badge, Card, EmptyState, Field, PageHeader } from '@/components/ui/Layout';
 import { Modal } from '@/components/ui/Modal';
+import { SerialLinks } from '@/components/document/SerialLink';
 import { describeVariance } from '@/lib/van-reconcile';
 import type { VanSummary } from '@/server/van-stock';
 import type { vanShift } from '@/server/van-stock';
@@ -250,6 +251,9 @@ export function VanStockClient({
                               {l.productName}
                               {l.unit && (
                                 <span className="ms-1 text-xs text-muted-foreground">({l.unit})</span>
+                              )}
+                              {(shift.unitsOnVan?.[l.productId] ?? []).length > 0 && (
+                                <span className="mt-0.5 block"><SerialLinks units={shift.unitsOnVan?.[l.productId] ?? []} /></span>
                               )}
                             </td>
                             <td className="px-3 py-2 text-end font-mono tabular-nums">{l.openingQty}</td>

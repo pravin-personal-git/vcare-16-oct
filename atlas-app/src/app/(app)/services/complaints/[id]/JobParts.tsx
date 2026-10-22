@@ -1,6 +1,7 @@
 'use client';
 
 import { ProductLink } from '@/components/document/ProductLink';
+import { SerialLink } from '@/components/document/SerialLink';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useState, useTransition } from 'react';
@@ -116,7 +117,7 @@ export function JobParts({ complaintId, installationChallanId, challans, faulty,
                   {/* The serial numbers on the line - reserved when raised, or out on the GDN (22 Oct 2026). */}
                   {(l.units ?? []).length > 0 && (
                     <span className="flex flex-wrap items-center gap-1">
-                      {l.units!.map((u) => <span key={u.id} className="rounded bg-brand/10 px-1.5 font-mono text-xs text-brand">{u.serialNo}</span>)}
+                      {l.units!.map((u) => <SerialLink key={u.id} serialNo={u.serialNo} unitId={u.id} />)}
                       {l.qtyIssued === 0 && <Badge tone="info">reserved</Badge>}
                     </span>
                   )}
@@ -291,7 +292,7 @@ export function RaiseChallan({ catalogue, busy, onClose, onSave, installation = 
                 </span>
                 {l.units.length > 0 && (
                   <span className="flex flex-wrap items-center gap-1">
-                    {l.units.map((u) => <span key={u.id} className="rounded bg-brand/10 px-1.5 font-mono text-xs text-brand">{u.serialNo}</span>)}
+                    {l.units.map((u) => <span key={u.id} className="rounded border border-warning/40 bg-warning/10 px-1.5 font-mono text-xs text-warning">{u.serialNo}</span>)}
                     <button type="button" className="text-xs text-muted-foreground hover:underline" onClick={() => setLines(lines.map((x) => (x.productId === l.productId ? { ...x, units: [] } : x)))}>clear</button>
                   </span>
                 )}

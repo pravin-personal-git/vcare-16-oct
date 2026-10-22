@@ -1043,7 +1043,16 @@ export interface JobGdnRow {
   id: string; gdnNo: string; issuedAt: Date; cancelledAt: Date | null; cancelReason: string | null;
   complaintId: string | null; installationChallanId: string | null; complaintNo: string; jobHref: string;
   customerId: string; customerName: string; challanNo: string; type: string; issuedByName: string | null;
-  lines: { productName: string; issued: number; returned: number; pending: number; used: number }[];
+  lines: { productName: string; issued: number; returned: number; pending: number; used: number;
+    /** The serial units out on this line (22 Oct 2026) - shown wherever the product is. */
+    units: { id: string; serialNo: string }[] }[];
+}
+
+/** Serial numbers for a set of unit ids, in one query. */
+async function serialsOf(storeIds: string[], unitIds: string[]): Promise<Map<string, string>> {
+  if (!unitIds.length) return new Map();
+  const rows = await db.stockUnit.findMany({ where: { id: { in: unitIds }, storeId: { in: storeIds }, serialNo: { not: null } }, select: { id: true, serialNo: true } });
+  return new Map(rows.map((u) => [u.id, u.serialNo!]));
 }
 
 /**
@@ -1055,18 +1064,19 @@ export async function jobGdnList(scope: StoreScope): Promise<JobGdnRow[]> {
     where: scopeWhere(scope),
     orderBy: { issuedAt: 'desc' }, take: FEED_MAX_ROWS,
     select: {
-      id: true, gdnNo: true, issuedAt: true, cancelledAt: true, cancelReason: true, issuedBy: true,
+      id: true, storeId: true, gdnNo: true, issuedAt: true, cancelledAt: true, cancelReason: true, issuedBy: true,
       challan: {
         select: {
           challanNo: true, type: true, complaintId: true, installationChallanId: true,
           complaint: { select: { complaintNo: true, customerId: true, customer: { select: { companyName: true, firstName: true, lastName: true } } } },
           installationChallan: { select: { challanNo: true, salesOrder: { select: { partyId: true, customerName: true, organizationName: true } } } },
-          lines: { select: { qty: true, qtyIssued: true, qtyReturned: true, qtyReturnPending: true, product: { select: { productName: true } } } },
+          lines: { select: { qty: true, qtyIssued: true, qtyReturned: true, qtyReturnPending: true, stockUnitIds: true, product: { select: { productName: true } } } },
         },
       },
     },
   });
   const ids = [...new Set(rows.map((r) => r.issuedBy).filter((x): x is string => !!x))];
+  const serial = await serialsOf(scope.kind === 'single' ? [scope.storeId] : [...new Set(rows.map((r) => r.storeId))], rows.flatMap((r) => r.challan.lines.flatMap((l) => l.stockUnitIds)));
   const names = new Map((ids.length ? await db.user.findMany({ where: { id: { in: ids } }, select: { id: true, fullName: true } }) : []).map((u) => [u.id, u.fullName]));
   return rows.map((r) => {
     return {
@@ -1076,7 +1086,10 @@ export async function jobGdnList(scope: StoreScope): Promise<JobGdnRow[]> {
       lines: r.challan.lines.map((l) => {
         // A cancelled GDN's lines were reset to 0 issued; show what it carried.
         const issued = r.cancelledAt ? l.qty : l.qtyIssued;
-        return { productName: l.product.productName, issued, returned: l.qtyReturned, pending: l.qtyReturnPending, used: r.cancelledAt ? 0 : Math.max(0, l.qtyIssued - l.qtyReturned) };
+        return {
+          productName: l.product.productName, issued, returned: l.qtyReturned, pending: l.qtyReturnPending, used: r.cancelledAt ? 0 : Math.max(0, l.qtyIssued - l.qtyReturned),
+          units: l.stockUnitIds.flatMap((id) => (serial.has(id) ? [{ id, serialNo: serial.get(id)! }] : [])),
+        };
       }),
     };
   });
@@ -1190,7 +1203,7 @@ export async function jobGdnDocument(scope: StoreScope, id: string) {
           },
           lines: {
             select: {
-              qty: true, qtyIssued: true, qtyReturned: true,
+              qty: true, qtyIssued: true, qtyReturned: true, stockUnitIds: true,
               product: { select: { productName: true, productCode: true } },
             },
           },
@@ -1210,6 +1223,7 @@ export async function jobGdnDocument(scope: StoreScope, id: string) {
 
   // `MaterialIssue` carries a storeId and no relation to the store, so the
   // letterhead is fetched rather than joined.
+  const docSerials = await serialsOf([g.storeId], g.challan.lines.flatMap((l) => l.stockUnitIds));
   const store = await db.store.findUnique({
     where: { id: g.storeId },
     select: { name: true, address: true, organization: { select: { name: true, logoPath: true } } },
@@ -1254,6 +1268,8 @@ export async function jobGdnDocument(scope: StoreScope, id: string) {
       // actually carried, or the document says a technician took nothing.
       qty: g.cancelledAt ? l.qty : l.qtyIssued,
       returned: l.qtyReturned,
+      // The serial numbers that went (22 Oct 2026) - printed under the product.
+      units: l.stockUnitIds.flatMap((id) => (docSerials.has(id) ? [{ id, serialNo: docSerials.get(id)! }] : [])),
     })).filter((l) => l.qty > 0),
   };
 }

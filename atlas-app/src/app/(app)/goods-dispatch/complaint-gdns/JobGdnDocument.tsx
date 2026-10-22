@@ -169,6 +169,8 @@ export function JobGdnDocument({ id, onClose }: { id: string; onClose: () => voi
                     {i.productCode && (
                       <span className="ms-2 font-mono text-xs">{i.productCode}</span>
                     )}
+                    {/* The serial numbers that went - on the paper the technician signs (22 Oct 2026). */}
+                    {i.units.length > 0 && <span className="block font-mono text-xs">S/N {i.units.map((u) => u.serialNo).join(', ')}</span>}
                   </td>
                   <td className="py-1.5 text-end tabular-nums">{i.qty}</td>
                   <td className="py-1.5 text-end tabular-nums">{i.returned || '—'}</td>

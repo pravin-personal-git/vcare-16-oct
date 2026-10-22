@@ -462,7 +462,7 @@ export async function vanShift(
   scope: StoreScope,
   vanId: string,
   since?: Date,
-): Promise<{ van: { id: string; name: string; code: string; holderName: string | null }; result: VanReconciliation }> {
+): Promise<{ van: { id: string; name: string; code: string; holderName: string | null }; result: VanReconciliation; unitsOnVan: Record<string, { id: string; serialNo: string }[]> }> {
   const van = await db.warehouse.findFirst({
     where: { id: vanId, ...scopeWhere(scope), kind: 'van' },
     select: { id: true, name: true, code: true, holder: { select: { fullName: true } } },
@@ -537,8 +537,16 @@ export async function vanShift(
     l.openingQty = l.onVanQty - l.issuedQty + l.usedQty + l.returnedQty;
   }
 
+  // The serial numbers on the van now, per product - shown beside each line (22 Oct 2026).
+  const unitsOnVan: Record<string, { id: string; serialNo: string }[]> = {};
+  for (const u of await db.stockUnit.findMany({
+    where: { warehouseId: van.id, status: { in: ['in_stock', 'reserved'] }, serialNo: { not: null }, product: scopeWhere(scope) },
+    select: { id: true, productId: true, serialNo: true }, orderBy: { serialNo: 'asc' },
+  })) (unitsOnVan[u.productId] ??= []).push({ id: u.id, serialNo: u.serialNo! });
+
   return {
     van: { id: van.id, name: van.name, code: van.code, holderName: van.holder?.fullName ?? null },
+    unitsOnVan,
     result: reconcileVan([...byProduct.values()].sort((a, b) =>
       a.productName.localeCompare(b.productName))),
   };

@@ -1,5 +1,6 @@
 'use client';
 import { CustomerLink } from '@/components/document/CustomerLink';
+import { SerialLink, SerialLinks } from '@/components/document/SerialLink';
 
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -103,6 +104,8 @@ export function JobPartsQueue({ challans, faulty, returns = [], installReturns =
               <p className="flex flex-wrap items-center gap-x-2 gap-y-1"><span className="font-mono font-semibold">{c.challanNo}</span>{job(c.jobHref, c.complaintNo)}</p>
               <p className="text-xs text-muted-foreground">{c.createdByName ?? '-'} · {when(c.createdAt)}</p>
               <p>{c.lines.map((l) => `${l.productName} × ${l.qty}`).join(', ')}</p>
+              {/* Serials the office reserved when raising (22 Oct 2026). */}
+              <SerialLinks units={c.lines.flatMap((l) => l.units ?? [])} />
               <p className="text-xs"><Link href={c.jobHref} className="text-brand hover:underline">Approve or reject on the job</Link></p>
             </div>
           ))}
@@ -118,6 +121,7 @@ export function JobPartsQueue({ challans, faulty, returns = [], installReturns =
                 </p>
                 <p className="text-xs"><CustomerLink id={c.customerId}>{c.customerName}</CustomerLink> · <span className="text-muted-foreground">{c.createdByName ?? '-'} · {when(c.createdAt)}</span></p>
                 <p>{c.lines.map((l) => `${l.productName} (${l.productCode}) × ${l.qty}`).join(' · ')}</p>
+                <SerialLinks units={c.lines.flatMap((l) => l.units ?? [])} />
                 {c.note && <p className="text-xs text-muted-foreground">{c.note}</p>}
                 <p className="flex flex-wrap gap-1.5">
                   {serial && <Badge tone="info">Pick the serials</Badge>}
@@ -137,7 +141,7 @@ export function JobPartsQueue({ challans, faulty, returns = [], installReturns =
               <p className="text-xs text-muted-foreground">{c.customerName} · {when(c.createdAt)}</p>
               <p>{c.lines.map((l) => `${l.productName}: ${l.qtyIssued} issued${l.qtyReturned ? `, ${l.qtyReturned} returned, ${l.qtyIssued - l.qtyReturned} used` : ''}`).join('; ')}</p>
               {c.lines.some((l) => (l.units ?? []).length) && (
-                <p className="font-mono text-xs text-muted-foreground">S/N {c.lines.flatMap((l) => (l.units ?? []).map((u) => u.serialNo)).join(', ')}</p>
+                <SerialLinks units={c.lines.flatMap((l) => l.units ?? [])} />
               )}
               {canIssue && c.gdnNos[0] && <div><GdnFix challanId={c.id} gdnNo={c.gdnNos[0]} lines={c.lines} /></div>}
             </div>
@@ -157,14 +161,14 @@ export function JobPartsQueue({ challans, faulty, returns = [], installReturns =
               {fitted.map((r) => (
                 <div key={r.itemId} className={row}>
                   <p className="flex flex-wrap items-center gap-x-2 gap-y-1"><Badge tone="info">Unused - installation</Badge>{job(`/services/installations/${r.challanId}`, r.challanNo)}</p>
-                  <p><strong>{r.productName} × {r.qty}</strong>{r.serialNo ? <span className="font-mono"> · S/N {r.serialNo}</span> : null}{r.orderNo ? <span className="text-muted-foreground"> · back against {r.orderNo}</span> : null}</p>
+                  <p><strong>{r.productName} × {r.qty}</strong>{r.serialNo ? <> · <SerialLink serialNo={r.serialNo} /></> : null}{r.orderNo ? <span className="text-muted-foreground"> · back against {r.orderNo}</span> : null}</p>
                   {canIssue && <div><ReceiveInstallBack challanId={r.challanId} itemId={r.itemId} qty={r.qty} onDone={(m) => setMsg({ ok: true, text: m })} /></div>}
                 </div>
               ))}
               {broken.map((f) => (
                 <div key={f.id} className={row}>
                   <p className="flex flex-wrap items-center gap-x-2 gap-y-1"><Badge tone="warning">{f.description.startsWith('Old unit') ? 'Old unit' : 'Faulty'}</Badge>{job(`/services/complaints/${f.complaintId}`, f.complaintNo)}</p>
-                  <p>{f.description}{f.productName ? ` (${f.productName})` : ''}{f.serialNo ? ` · S/N ${f.serialNo}` : ''}</p>
+                  <p>{f.description}{f.productName ? ` (${f.productName})` : ''}{f.serialNo ? <> · <SerialLink serialNo={f.serialNo} /></> : null}</p>
                   <p className="text-xs text-muted-foreground">{when(f.loggedAt)}</p>
                   {canIssue && <ReceiveWithSerial busy={pending} onReceive={(serial) => run(() => receiveFaultyPartAction(f.id, serial), (r) => r.caseNo ? `Received. Replacements case ${r.caseNo} opened - send it to the supplier or scrap it from Services > Replacements.` : 'Received at the store.')} />}
                 </div>

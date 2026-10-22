@@ -1,6 +1,7 @@
 'use client';
 
 import { docMessage } from '@/lib/wa-message';
+import { SerialLink } from '@/components/document/SerialLink';
 import { whatsappLink } from '@/lib/revenue';
 
 import { CustomerLink } from '@/components/document/CustomerLink';
@@ -762,9 +763,7 @@ function ItemsCard({ items, complaintId, canEdit, onTakeOff }: { items: ItemVM[]
                         <button type="button" className="text-xs font-medium text-danger hover:underline" onClick={() => onTakeOff(i)}>Take off</button>
                       )}
                     </p>
-                    <p className="text-xs text-muted-foreground">{i.serialNo ? (i.stockUnitId
-                      ? <Link href={`/stock-units?q=${encodeURIComponent(i.serialNo)}&open=${i.stockUnitId}`} className="font-mono hover:text-brand hover:underline">S/N {i.serialNo}</Link>
-                      : <span className="font-mono">S/N {i.serialNo}</span>) : 'no serial'}{i.problem ? ` · ${i.problem}` : ''}</p>
+                    <p className="text-xs text-muted-foreground">{i.serialNo ? <>S/N <SerialLink serialNo={i.serialNo} unitId={i.stockUnitId} /></> : 'no serial'}{i.problem ? ` · ${i.problem}` : ''}</p>
                     {i.rma && <ItemRma rma={i.rma} />}
                     {i.voidStatus === 'requested' && <p className="mt-1 text-xs text-warning">Warranty void asked: {i.voidReason} - waiting for a manager (My Desk)</p>}
                     {i.voidStatus === 'rejected' && <p className="mt-1 text-xs text-muted-foreground">Void refused: {i.voidDecisionNote}</p>}
