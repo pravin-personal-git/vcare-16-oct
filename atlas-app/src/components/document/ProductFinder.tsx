@@ -46,6 +46,8 @@ export interface FindableProduct {
   sku?: string | null;
   stock: number;
   dlpPaise: number;
+  /** Kept by serial number (22 Oct 2026) - picking it by serial also names the unit. */
+  serial?: boolean;
 }
 
 const sel = 'h-8 min-w-0 flex-1 rounded-lg border border-border bg-card px-2 text-xs outline-none focus:border-brand';
@@ -67,14 +69,19 @@ function unitWhere(u: { status: string; holderName: string | null }): string {
   }
 }
 
-interface SerialHit { unitId: string; serialNo: string; productId: string; productName: string; where: string }
+interface SerialHit { unitId: string; serialNo: string; productId: string; productName: string; where: string; onShelf: boolean }
 
 export function ProductFinder<T extends FindableProduct>({
-  products, pickedId, onPick, autoFocus,
+  products, pickedId, onPick, onPickUnit, autoFocus,
 }: {
   products: T[];
   pickedId: string;
   onPick: (id: string) => void;
+  /**
+   * Picked by a serial number that is on the shelf (22 Oct 2026): the unit
+   * too, so a challan line can name it. Called right after `onPick`.
+   */
+  onPickUnit?: (u: { productId: string; unitId: string; serialNo: string }) => void;
   autoFocus?: boolean;
 }) {
   const [cat, setCat] = useState('');
@@ -136,7 +143,7 @@ export function ProductFinder<T extends FindableProduct>({
         .then((r) => {
           if (n !== asked.current) return;
           setSerialHits((r.rows ?? []).filter((u) => u.serialNo).map((u) => ({
-            unitId: u.id, serialNo: u.serialNo as string, productId: u.productId, productName: u.productName, where: unitWhere(u),
+            unitId: u.id, serialNo: u.serialNo as string, productId: u.productId, productName: u.productName, where: unitWhere(u), onShelf: u.status === 'in_stock',
           })));
           setLookingUp(false);
         });
@@ -148,7 +155,7 @@ export function ProductFinder<T extends FindableProduct>({
   const byId = useMemo(() => new Map(products.map((p) => [p.id, p])), [products]);
   const serialRows = serialAsk ? serialHits.map((h) => ({ hit: h, product: byId.get(h.productId) ?? null })) : [];
   const pickable = serialRows.filter((r): r is { hit: SerialHit; product: T } => r.product !== null);
-  const options: T[] = [...pickable.map((r) => r.product), ...results];
+  const options: { p: T; unit?: SerialHit }[] = [...pickable.map((r) => ({ p: r.product, unit: r.hit })), ...results.map((p) => ({ p }))];
 
   useEffect(() => {
     const onDown = (e: MouseEvent) => { if (box.current && !box.current.contains(e.target as Node)) setOpen(false); };
@@ -156,7 +163,11 @@ export function ProductFinder<T extends FindableProduct>({
     return () => window.removeEventListener('mousedown', onDown);
   }, []);
 
-  const choose = (p: T) => { onPick(p.id); setOpen(false); setQ(''); };
+  const choose = (p: T, unit?: SerialHit) => {
+    onPick(p.id);
+    if (unit?.onShelf) onPickUnit?.({ productId: p.id, unitId: unit.unitId, serialNo: unit.serialNo });
+    setOpen(false); setQ('');
+  };
 
   return (
     <div ref={box} className="relative grid gap-1.5">
@@ -201,7 +212,7 @@ export function ProductFinder<T extends FindableProduct>({
           onKeyDown={(e) => {
             if (e.key === 'ArrowDown') { e.preventDefault(); setOpen(true); setActive((a) => Math.min(a + 1, options.length - 1)); }
             if (e.key === 'ArrowUp') { e.preventDefault(); setActive((a) => Math.max(a - 1, 0)); }
-            if (e.key === 'Enter' && open && options[active]) { e.preventDefault(); choose(options[active]); }
+            if (e.key === 'Enter' && open && options[active]) { e.preventDefault(); choose(options[active].p, options[active].unit); }
             if (e.key === 'Escape') setOpen(false);
           }}
           className="h-9 w-full rounded-lg border border-border bg-card ps-8 pe-2 text-sm outline-none focus:border-brand focus:ring-2 focus:ring-brand/20"
@@ -219,7 +230,7 @@ export function ProductFinder<T extends FindableProduct>({
             const i = product ? pickable.findIndex((r) => r.hit.unitId === hit.unitId) : -1;
             return (
               <li key={hit.unitId} role="option" aria-selected={i === active} aria-disabled={!product}>
-                <button type="button" disabled={!product} onMouseEnter={() => i >= 0 && setActive(i)} onClick={() => product && choose(product)}
+                <button type="button" disabled={!product} onMouseEnter={() => i >= 0 && setActive(i)} onClick={() => product && choose(product, hit)}
                   className={`flex w-full items-center gap-3 px-3 py-1.5 text-start disabled:cursor-not-allowed disabled:opacity-60 ${i === active ? 'bg-brand/10' : ''}`}>
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-sm font-medium" data-no-translate>{hit.productName}</span>

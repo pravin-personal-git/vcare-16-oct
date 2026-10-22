@@ -39,7 +39,8 @@ const PLAN: Record<JobEvent, { to: Who[]; title: (no: string, x: string) => stri
   challan_to_issue: { to: ['store'], title: (no, x) => `Parts to issue for ${no}: ${x}` },
   challan_issued: { to: ['tech'], title: (no, x) => `${no}: parts ready - issued on ${x}` },
   // 28 Sep 2026: the store confirms returns and receives the replaced unit.
-  parts_returning: { to: ['store'], title: (no, x) => `Unused parts coming back for ${no}: ${x} - receive them` },
+  // The office too (Vcare, 22 Oct 2026): it takes unused parts back from the job page.
+  parts_returning: { to: ['store', 'office'], title: (no, x) => `Unused parts coming back for ${no}: ${x} - take them back` },
   gdn_auto: { to: ['store'], title: (no, x) => `${no}: ${x} created automatically - hand the parts to the technician` },
   gdn_changed: { to: ['tech'], title: (no, x) => `${no}: the store changed the parts issue - ${x}` },
   old_unit_due: { to: ['store', 'tech'], title: (no, x) => `${no}: bring back the old unit - ${x}` },

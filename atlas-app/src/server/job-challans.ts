@@ -26,6 +26,15 @@ import { assertActionAllowed, stepBlockedReason } from './flow-gate';
  * ever shown to the customer (activities are internal kinds).
  */
 
+/**
+ * One line as raised or changed. `unitIds` (22 Oct 2026, Vcare): the office
+ * may name the exact serial-number units when raising - they are reserved for
+ * this challan at once, and an approved challan whose every serial line is
+ * named goes out on its GDN by itself. Optional: none named, the store picks
+ * them when it issues, as before.
+ */
+export interface ChallanLineInput { productId: string; qty: number; unitIds?: string[] }
+
 export const JOB_CHALLAN_TYPES = ['material', 'replacement', 'installation'] as const;
 export type JobChallanType = (typeof JOB_CHALLAN_TYPES)[number];
 export const JOB_CHALLAN_TYPE_LABEL: Record<JobChallanType, string> = {
@@ -172,7 +181,7 @@ export async function challansToIssue(scope: StoreScope): Promise<JobChallanView
  */
 export async function raiseJobChallan(
   scope: StoreScope, complaintId: string,
-  input: { type: string; lines: { productId: string; qty: number }[]; note?: string | null },
+  input: { type: string; lines: ChallanLineInput[]; note?: string | null },
   userId: string, actor: 'technician' | 'office',
 ): Promise<{ id: string; challanNo: string }> {
   const storeId = scopeForWrite(scope);
@@ -210,7 +219,7 @@ export async function raiseJobChallan(
  */
 export async function raiseInstallationChallan(
   scope: StoreScope, installationChallanId: string,
-  input: { type: string; lines: { productId: string; qty: number }[]; note?: string | null },
+  input: { type: string; lines: ChallanLineInput[]; note?: string | null },
   userId: string, actor: 'technician' | 'office',
 ): Promise<{ id: string; challanNo: string }> {
   const storeId = scopeForWrite(scope);
@@ -236,7 +245,7 @@ export const INSTALL_WORK_STAGES = ['survey', 'material_ready', 'installing', 't
 /** The lines checked, the challan numbered and logged, and sent for approval. */
 async function createChallan(
   scope: StoreScope, j: JobRef, type: JobChallanType,
-  input: { lines: { productId: string; qty: number }[]; note?: string | null }, userId: string,
+  input: { lines: ChallanLineInput[]; note?: string | null }, userId: string,
 ): Promise<{ id: string; challanNo: string }> {
   const lines = await cleanLines(j.storeId, input.lines);
 
@@ -245,6 +254,7 @@ async function createChallan(
     const c = await tx.jobChallan.create({
       data: { storeId: j.storeId, challanNo, complaintId: j.complaintId, installationChallanId: j.installationChallanId, type, note: input.note?.trim() || null, createdBy: userId, lines: { create: lines } },
     });
+    await reserveUnits(tx, j.storeId, lines.flatMap((l) => l.stockUnitIds), { refType: 'JobChallan', refId: c.id, refNo: challanNo }, userId);
     await say(tx, j, 'challan_created', userId, {
       body: `${JOB_CHALLAN_TYPE_LABEL[type]} challan ${challanNo} raised (${lines.length} line${lines.length === 1 ? '' : 's'}) - waiting for approval.`,
     });
@@ -254,14 +264,73 @@ async function createChallan(
   return { id: challan.id, challanNo };
 }
 
-/** The lines as typed, checked: whole quantities above 0, at most 50, every product in this branch. */
-async function cleanLines(storeId: string, raw: { productId: string; qty: number }[]) {
-  const lines = raw.filter((l) => l.productId && Number.isFinite(l.qty) && l.qty > 0).map((l) => ({ productId: l.productId, qty: Math.trunc(l.qty) }));
+/**
+ * The lines as typed, checked: whole quantities above 0, at most 50, every
+ * product in this branch. Serial numbers named on a line: a serial-number
+ * product, exactly as many as the quantity, each one this product's and on the
+ * shelf - or already reserved by this same challan (`challanId`, when it is
+ * being changed).
+ */
+async function cleanLines(storeId: string, raw: ChallanLineInput[], challanId?: string) {
+  const lines = raw.filter((l) => l.productId && Number.isFinite(l.qty) && l.qty > 0)
+    .map((l) => ({ productId: l.productId, qty: Math.trunc(l.qty), stockUnitIds: [...new Set((l.unitIds ?? []).filter(Boolean))] }));
   if (!lines.length) throw new ComplaintError('Add at least one part with a quantity.');
   if (lines.length > 50) throw new ComplaintError('That is more than 50 lines - split it into two challans.');
   const found = await db.product.count({ where: { id: { in: lines.map((l) => l.productId) }, storeId } });
   if (found !== new Set(lines.map((l) => l.productId)).size) throw new ComplaintError('A product is not in this branch.');
+
+  const named = lines.filter((l) => l.stockUnitIds.length);
+  if (named.length) {
+    const all = named.flatMap((l) => l.stockUnitIds);
+    if (new Set(all).size !== all.length) throw new ComplaintError('The same serial number is on two lines.');
+    const products = new Map((await db.product.findMany({ where: { id: { in: named.map((l) => l.productId) } }, select: { id: true, productName: true, trackingMode: true } })).map((p) => [p.id, p]));
+    const units = new Map((await db.stockUnit.findMany({ where: { id: { in: all }, storeId }, select: { id: true, productId: true, status: true, serialNo: true } })).map((u) => [u.id, u]));
+    const mine = new Set(challanId
+      ? (await db.jobChallanLine.findMany({ where: { challanId, qtyIssued: 0 }, select: { stockUnitIds: true } })).flatMap((x) => x.stockUnitIds)
+      : []);
+    for (const l of named) {
+      const p = products.get(l.productId)!;
+      if (p.trackingMode !== 'serial') throw new ComplaintError(`${p.productName} is not kept by serial number - leave its serial out.`);
+      if (l.stockUnitIds.length !== l.qty) throw new ComplaintError(`Pick ${l.qty} serial number${l.qty === 1 ? '' : 's'} for ${p.productName} - or none, and the store picks them.`);
+      for (const id of l.stockUnitIds) {
+        const u = units.get(id);
+        if (!u || u.productId !== l.productId) throw new ComplaintError(`A serial number picked is not a ${p.productName}.`);
+        if (!(u.status === 'in_stock' || (u.status === 'reserved' && mine.has(u.id)))) {
+          throw new ComplaintError(`${u.serialNo ?? 'A unit'} is not on the shelf - it is ${u.status.replace(/_/g, ' ')}.`);
+        }
+      }
+    }
+  }
   return lines;
+}
+
+/**
+ * Hold named units for a challan: off the shelf for anyone else (a sale, another
+ * challan), still counted in stock. Only from in_stock, all or nothing - two
+ * people picking the same unit at once, the second is told.
+ */
+async function reserveUnits(tx: Tx, storeId: string, ids: string[], ref: { refType: string; refId: string; refNo: string }, userId: string) {
+  if (!ids.length) return;
+  const n = await tx.stockUnit.updateMany({ where: { id: { in: ids }, storeId, status: 'in_stock' }, data: { status: 'reserved' } });
+  if (n.count !== ids.length) throw new ComplaintError('A serial number picked was taken just now - pick again.');
+  for (const id of ids) {
+    await tx.stockUnitEvent.create({ data: { storeId, unitId: id, eventType: 'status', fromStatus: 'in_stock', toStatus: 'reserved', partyId: null, ...ref, createdBy: userId } });
+  }
+}
+
+/** Put a not-yet-issued challan's reserved units back on the shelf (rejected, withdrawn, changed). */
+async function releaseUnits(tx: Tx, storeId: string, challanId: string, ref: { refType: string; refId: string; refNo: string }, userId: string) {
+  const lines = await tx.jobChallanLine.findMany({ where: { challanId, qtyIssued: 0 }, select: { stockUnitIds: true } });
+  const ids = lines.flatMap((l) => l.stockUnitIds);
+  if (!ids.length) return;
+  const held = (await tx.stockUnit.findMany({ where: { id: { in: ids }, storeId, status: 'reserved' }, select: { id: true } })).map((u) => u.id);
+  if (held.length) {
+    await tx.stockUnit.updateMany({ where: { id: { in: held } }, data: { status: 'in_stock' } });
+    for (const id of held) {
+      await tx.stockUnitEvent.create({ data: { storeId, unitId: id, eventType: 'status', fromStatus: 'reserved', toStatus: 'in_stock', partyId: null, ...ref, createdBy: userId } });
+    }
+  }
+  await tx.jobChallanLine.updateMany({ where: { challanId, qtyIssued: 0 }, data: { stockUnitIds: [] } });
 }
 
 // ------------------------------------------ change or withdraw (22 Oct 2026)
@@ -334,11 +403,11 @@ const linesText = (lines: { qty: number; product: { productName: string } }[]) =
 /** Change the lines, note or type of a challan not yet approved, and send it for approval again. */
 export async function editJobChallan(
   scope: StoreScope, id: string, on: OnJob,
-  input: { type?: string | null; lines: { productId: string; qty: number }[]; note?: string | null },
+  input: { type?: string | null; lines: ChallanLineInput[]; note?: string | null },
   userId: string, actor: 'technician' | 'office',
 ): Promise<{ challanNo: string }> {
   const c = await loadForChange(scope, id, on, userId, actor, EDITABLE, 'changed');
-  const lines = await cleanLines(c.storeId, input.lines);
+  const lines = await cleanLines(c.storeId, input.lines, c.id);
   // Same choices as raising: an installation's challan is never a replacement.
   const kinds: readonly string[] = c.installationChallanId ? ['material', 'installation'] : JOB_CHALLAN_TYPES;
   const type = input.type && kinds.includes(input.type) ? input.type : c.type;
@@ -347,8 +416,12 @@ export async function editJobChallan(
   await db.$transaction(async (tx) => {
     await claimForChange(tx, scope, c, { type, note, status: 'pending_approval', rejectionReason: null, approvedBy: null, approvedAt: null }, userId,
       'Withdrawn - the challan was changed and sent again.');
+    // The units it held go back first, then the new picks are reserved (a unit kept is simply held again).
+    const ref = { refType: 'JobChallan', refId: c.id, refNo: c.challanNo };
+    await releaseUnits(tx, c.storeId, c.id, ref, userId);
     await tx.jobChallanLine.deleteMany({ where: { challanId: c.id } });
     await tx.jobChallanLine.createMany({ data: lines.map((l) => ({ ...l, challanId: c.id })) });
+    await reserveUnits(tx, c.storeId, lines.flatMap((l) => l.stockUnitIds), ref, userId);
     const now = await tx.jobChallanLine.findMany({ where: { challanId: c.id }, select: { qty: true, product: { select: { productName: true } } } });
     await say(tx, c, 'challan_changed', userId, {
       body: `Challan ${c.challanNo} changed${c.status === 'rejected' ? ' after it was rejected' : ''}: ${linesText(c.lines)} → ${linesText(now)}${note && note !== c.note ? `. Note: ${note}` : ''} - waiting for approval again.`,
@@ -366,6 +439,7 @@ export async function withdrawJobChallan(
   const why = reason?.trim() || null;
   await db.$transaction(async (tx) => {
     await claimForChange(tx, scope, c, { status: 'withdrawn', rejectionReason: why }, userId, `Withdrawn${why ? `: ${why}` : ''}`);
+    await releaseUnits(tx, c.storeId, c.id, { refType: 'JobChallan', refId: c.id, refNo: c.challanNo }, userId);
     await say(tx, c, 'challan_changed', userId, { body: `Challan ${c.challanNo} withdrawn${why ? `: ${why}` : ''} - nothing was issued on it.` });
   });
   return { challanNo: c.challanNo };
@@ -401,20 +475,29 @@ export async function decideJobChallan(
     body: final === 'approved' ? `Challan ${c.challanNo} approved - the store can issue it.` : `Challan ${c.challanNo} rejected: ${note?.trim() || '-'}`,
   });
   await tell(c, 'challan_decided', final === 'approved' ? `${c.challanNo} approved - collect from the store` : `${c.challanNo} rejected: ${note?.trim() || '-'}`);
-  if (final !== 'approved') return;
+  if (final !== 'approved') {
+    // Rejected: the units it held go back on the shelf; changing it and sending it again picks them afresh.
+    await db.$transaction((tx) => releaseUnits(tx, c.storeId, c.id, { refType: 'JobChallan', refId: c.id, refNo: c.challanNo }, userId));
+    return;
+  }
   // Settings > Field jobs > "Create the GDN automatically" (on by default,
   // Pravin 28 Sep 2026): the GDN is made now, unless stock is short - then it
   // waits for the store as before. The store can correct or cancel it.
   const { getJobSettings } = await import('./job-settings');
   if ((await getJobSettings(c.storeId)).autoIssueGdn) {
     const short = await stockShortfall(c.storeId, c.id);
-    // Serial items wait for the store to pick which units go (live test 2).
-    const serial = await db.jobChallanLine.count({ where: { challanId: c.id, product: { trackingMode: 'serial' } } });
-    if (serial) {
-      await say(db, c, 'challan_changed', null, { body: `Challan ${c.challanNo} has serial-number items - the store picks the serials and issues it in Parts counter.` });
+    // Serial items go out by themselves when the office named them on raising
+    // (22 Oct 2026); a serial line left unnamed waits for the store to pick (live test 2).
+    const serialLines = await db.jobChallanLine.findMany({
+      where: { challanId: c.id, product: { trackingMode: 'serial' } },
+      select: { id: true, qty: true, stockUnitIds: true, product: { select: { productName: true } } },
+    });
+    const unnamed = serialLines.filter((l) => l.stockUnitIds.length !== l.qty);
+    if (unnamed.length) {
+      await say(db, c, 'challan_changed', null, { body: `Challan ${c.challanNo}: no serial numbers picked for ${unnamed.map((l) => l.product.productName).join(', ')} - the store picks them and issues it in Parts counter.` });
     } else if (!short.length) {
       try {
-        const { gdnNo } = await issueJobChallan(scope, c.id, userId);
+        const { gdnNo } = await issueJobChallan(scope, c.id, userId, Object.fromEntries(serialLines.map((l) => [l.id, l.stockUnitIds])));
         await say(db, c, 'challan_changed', userId, { body: `${gdnNo} created automatically on approval.` });
         await tell(c, 'gdn_auto', gdnNo);
         return;
@@ -568,12 +651,21 @@ export async function issueJobChallan(
 
   // Serial items: the store picks exactly which units go (live test 2 - the
   // serial list used to keep showing them in stock).
+  // A unit this line reserved when it was raised (22 Oct 2026) may go too; units it
+  // reserved and the store did not pick go back on the shelf.
   const units = new Map<string, string[]>();
+  const fromReserved: string[] = [];
+  const unpick: string[] = [];
   for (const l of c.lines.filter((x) => x.product.trackingMode === 'serial')) {
     const ids = [...new Set(serials[l.id] ?? [])];
     if (ids.length !== l.qty) throw new ComplaintError(`Pick ${l.qty} serial number${l.qty === 1 ? '' : 's'} for ${l.product.productName}.`);
-    const ok = await db.stockUnit.count({ where: { id: { in: ids }, storeId, productId: l.productId, status: 'in_stock' } });
-    if (ok !== ids.length) throw new ComplaintError(`A serial picked for ${l.product.productName} is not in stock any more.`);
+    const ok = await db.stockUnit.findMany({
+      where: { id: { in: ids }, storeId, productId: l.productId, OR: [{ status: 'in_stock' }, { status: 'reserved', id: { in: l.stockUnitIds } }] },
+      select: { id: true, status: true },
+    });
+    if (ok.length !== ids.length) throw new ComplaintError(`A serial picked for ${l.product.productName} is not in stock any more.`);
+    fromReserved.push(...ok.filter((u) => u.status === 'reserved').map((u) => u.id));
+    unpick.push(...l.stockUnitIds.filter((u) => !ids.includes(u)));
     units.set(l.id, ids);
   }
   // Quantity items come out of the warehouse that holds them.
@@ -593,7 +685,13 @@ export async function issueJobChallan(
       // name. Without `partyId` it would bind nothing, because a unit that says
       // `with_customer` and names nobody is the hole this work closes.
       : [{ productId: l.productId, qty: -l.qty, reason: 'job_issue' as const, refType: 'MaterialIssue', refId: mi.id, refNo: gdnNo, warehouseId: homes.get(l.id) ?? null, partyId }]));
-    for (const ids of units.values()) await setUnits(tx, storeId, ids, 'in_stock', 'with_customer', partyId, { refType: 'MaterialIssue', refId: mi.id, refNo: gdnNo }, userId);
+    const ref = { refType: 'MaterialIssue', refId: mi.id, refNo: gdnNo };
+    for (const ids of units.values()) {
+      await setUnits(tx, storeId, ids.filter((u) => !fromReserved.includes(u)), 'in_stock', 'with_customer', partyId, ref, userId);
+      await setUnits(tx, storeId, ids.filter((u) => fromReserved.includes(u)), 'reserved', 'with_customer', partyId, ref, userId);
+    }
+    const stillHeld = unpick.length ? (await tx.stockUnit.findMany({ where: { id: { in: unpick }, status: 'reserved' }, select: { id: true } })).map((u) => u.id) : [];
+    await setUnits(tx, storeId, stillHeld, 'reserved', 'in_stock', null, ref, userId);
     for (const l of c.lines) {
       await tx.jobChallanLine.update({
         where: { id: l.id },
@@ -988,16 +1086,67 @@ export async function jobGdnList(scope: StoreScope): Promise<JobGdnRow[]> {
 export async function serialChoices(scope: StoreScope, challanId: string) {
   const c = await db.jobChallan.findFirst({
     where: { id: challanId, ...scopeWhere(scope) },
-    select: { lines: { where: { product: { trackingMode: 'serial' } }, select: { id: true, productId: true, qty: true, product: { select: { productName: true } } } } },
+    select: { lines: { where: { product: { trackingMode: 'serial' } }, select: { id: true, productId: true, qty: true, stockUnitIds: true, product: { select: { productName: true } } } } },
   });
   if (!c) throw new ComplaintError('Challan not found in your scope.');
   return Promise.all(c.lines.map(async (l) => ({
     lineId: l.id, productName: l.product.productName, qty: l.qty,
+    // The units the office reserved for this line come ticked (22 Oct 2026).
+    picked: l.stockUnitIds,
     units: (await db.stockUnit.findMany({
-      where: { ...scopeWhere(scope), productId: l.productId, status: 'in_stock', serialNo: { not: null } },
+      where: { ...scopeWhere(scope), productId: l.productId, serialNo: { not: null }, OR: [{ status: 'in_stock' }, { status: 'reserved', id: { in: l.stockUnitIds } }] },
       select: { id: true, serialNo: true }, orderBy: { receivedAt: 'asc' }, take: LIST_MAX_ROWS,
     })).map((u) => ({ id: u.id, serialNo: u.serialNo! })),
   })));
+}
+
+/** A serial-number product's units on the shelf, to pick when raising a challan (22 Oct 2026). */
+export async function unitsOnShelf(scope: StoreScope, productId: string) {
+  return (await db.stockUnit.findMany({
+    where: { ...scopeWhere(scope), productId, status: 'in_stock', serialNo: { not: null } },
+    select: { id: true, serialNo: true }, orderBy: { receivedAt: 'asc' }, take: LIST_MAX_ROWS,
+  })).map((u) => ({ id: u.id, serialNo: u.serialNo! }));
+}
+
+/**
+ * The store swaps a serial on an issued GDN (22 Oct 2026, Vcare): the unit
+ * written down was not the one that went. The old unit comes back on the
+ * shelf, the new one goes to the customer, both moves are on the GDN and the
+ * job; the count, the cost and what is billed do not change - same product.
+ */
+export async function swapIssuedUnit(
+  scope: StoreScope, lineId: string, fromUnitId: string, toUnitId: string, reason: string, userId: string,
+): Promise<void> {
+  const storeId = scopeForWrite(scope);
+  const why = reason.trim();
+  if (!why) throw new ComplaintError('Say why the serial changes - it is kept on the job.');
+  const line = await loadLine(scope, lineId);
+  const c = line.challan;
+  const issue = c.issues[0];
+  if (!issue) throw new ComplaintError('This challan has no GDN yet - pick the serial when issuing.');
+  if (line.product.trackingMode !== 'serial') throw new ComplaintError(`${line.product.productName} is not kept by serial number.`);
+  if (!line.stockUnitIds.includes(fromUnitId)) throw new ComplaintError('That serial was not issued on this line.');
+  if (fromUnitId === toUnitId) throw new ComplaintError('Pick a different serial number.');
+  const [from, to] = await Promise.all([
+    db.stockUnit.findFirst({ where: { id: fromUnitId, storeId }, select: { serialNo: true, status: true } }),
+    db.stockUnit.findFirst({ where: { id: toUnitId, storeId, productId: line.productId }, select: { serialNo: true, status: true } }),
+  ]);
+  if (!from || from.status !== 'with_customer') throw new ComplaintError('The serial on the GDN is not out with the customer any more - it was returned or moved.');
+  if (!to || to.status !== 'in_stock') throw new ComplaintError(`${to?.serialNo ?? 'That unit'} is not on the shelf.`);
+  const { partyId } = await costTarget(scope, c);
+  const ref = { refType: 'MaterialIssue', refId: issue.id, refNo: issue.gdnNo };
+  await db.$transaction(async (tx) => {
+    const moved = await tx.stockUnit.updateMany({ where: { id: toUnitId, status: 'in_stock' }, data: { status: 'with_customer', partyId } });
+    if (moved.count !== 1) throw new ComplaintError('That unit was taken just now - pick another.');
+    await tx.stockUnitEvent.create({ data: { storeId, unitId: toUnitId, eventType: 'status', fromStatus: 'in_stock', toStatus: 'with_customer', partyId, ...ref, createdBy: userId } });
+    await setUnits(tx, storeId, [fromUnitId], 'with_customer', 'in_stock', null, ref, userId);
+    await applyMovements(tx, storeId, userId, [
+      { productId: line.productId, qty: 1, reason: 'job_return', refType: 'JobChallanLine', refId: line.id, refNo: issue.gdnNo, stockUnitId: fromUnitId, note: `Serial changed on ${issue.gdnNo}: ${why}` },
+      { productId: line.productId, qty: -1, reason: 'job_issue', ...ref, stockUnitId: toUnitId, partyId, note: `Serial changed on ${issue.gdnNo}: ${why}` },
+    ]);
+    await tx.jobChallanLine.update({ where: { id: line.id }, data: { stockUnitIds: line.stockUnitIds.map((u) => (u === fromUnitId ? toUnitId : u)) } });
+    await say(tx, c, 'challan_changed', userId, { body: `${issue.gdnNo}: ${line.product.productName} serial changed ${from.serialNo} → ${to.serialNo}. Reason: ${why}` });
+  });
 }
 
 /**

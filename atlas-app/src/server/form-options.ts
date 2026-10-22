@@ -25,6 +25,8 @@ export interface CatalogueOptionRow {
   subCategory?: string | null; brand?: string | null; hsn?: string | null; taxRatePct?: number;
   /** For the product box's search - a scanned or typed barcode finds the product (4 Oct 2026). */
   barcode?: string | null; sku?: string | null;
+  /** Kept by serial number - a challan line can name its units (22 Oct 2026). */
+  serial?: boolean;
   amcAvailable?: boolean; amcPricingMode?: string | null; amcDurationMonths?: number | null;
   amcAnnualPricePaise?: number | null; amcTerms?: string | null; costPaise: number | null;
   /**
@@ -63,17 +65,19 @@ export async function buyerOptions(scope: StoreScope): Promise<BuyerOptionRow[]>
 
 export async function catalogueOptions(scope: StoreScope): Promise<CatalogueOptionRow[]> {
   const products = await listProducts(scope);
-  const [costs, tax, availability] = await Promise.all([
+  const [costs, tax, availability, serialRows] = await Promise.all([
     costsFor(scope, products.map((p) => p.id)),
     taxChoices(scope),
     availabilityFor(scope, products.map((p) => p.id)),
+    db.product.findMany({ where: { ...scopeWhere(scope), trackingMode: 'serial' }, select: { id: true } }),
   ]);
+  const serialIds = new Set(serialRows.map((r) => r.id));
   return products.map((p) => {
     const c = costs.get(p.id);
     return {
       id: p.id, code: p.productCode, name: p.productName, dlpPaise: p.dlpPaise, mrpPaise: p.mrpPaise,
       category: p.categoryName, subCategory: p.subCategoryName, brand: p.brandName, hsn: p.hsnCode,
-      barcode: p.barcode, sku: p.sku,
+      barcode: p.barcode, sku: p.sku, serial: serialIds.has(p.id),
       // The master's rate for this HSN; undefined keeps the old 18% default.
       taxRatePct: rateForHsn(p.hsnCode, tax.byHsn) ?? undefined,
       stock: p.currentQty,

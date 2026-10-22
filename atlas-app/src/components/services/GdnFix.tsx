@@ -1,12 +1,13 @@
 'use client';
 
-import { useState, useTransition } from 'react';
+import { useEffect, useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/Button';
 import { Modal } from '@/components/ui/Modal';
 import { Field } from '@/components/ui/Layout';
 import {
   cancelJobIssueAction, correctJobIssueAction, issueJobChallanAction, receiveReturnedPartsAction, serialChoicesAction,
+  swapIssuedUnitAction, unitsOnShelfAction,
 } from '@/app/(app)/services/actions';
 import { installReceiveReturnAction } from '@/app/(app)/services/installations/actions';
 
@@ -120,7 +121,7 @@ export function GdnFix({ challanId, gdnNo, lines }: { challanId: string; gdnNo: 
 export function IssueParts({ challanId, hasSerial, label = 'Issue (create GDN)', onDone }: { challanId: string; hasSerial: boolean; label?: string; onDone?: (msg: string) => void }) {
   const router = useRouter();
   const [pending, start] = useTransition();
-  const [pick, setPick] = useState<null | { lineId: string; productName: string; qty: number; units: { id: string; serialNo: string }[] }[]>(null);
+  const [pick, setPick] = useState<null | { lineId: string; productName: string; qty: number; picked?: string[]; units: { id: string; serialNo: string }[] }[]>(null);
   const [chosen, setChosen] = useState<Record<string, string[]>>({});
   const [error, setError] = useState<string | null>(null);
   const issue = (serials: Record<string, string[]> = {}) => start(async () => {
@@ -134,7 +135,8 @@ export function IssueParts({ challanId, hasSerial, label = 'Issue (create GDN)',
     start(async () => {
       const r = await serialChoicesAction(challanId);
       if (r.error || !r.lines) { setError(r.error ?? 'Could not load the serial numbers.'); return; }
-      setChosen({}); setPick(r.lines);
+      // The units the office reserved when raising come ticked (22 Oct 2026).
+      setChosen(Object.fromEntries(r.lines.map((l) => [l.lineId, l.picked ?? []]))); setPick(r.lines);
     });
   };
   return (
@@ -221,5 +223,71 @@ export function ReceiveWithSerial({ onReceive, busy }: { onReceive: (serial: str
       <Button size="sm" loading={busy} onClick={() => { setOpen(false); onReceive(serial.trim() || null); }}>Confirm</Button>
       <button type="button" className="text-xs text-muted-foreground" onClick={() => setOpen(false)}>Cancel</button>
     </span>
+  );
+}
+
+/**
+ * A serial-number product's units on the shelf, ticked up to `need` (22 Oct
+ * 2026: the office names them when raising a challan). Ticking none is fine -
+ * the store picks them when it issues.
+ */
+export function ShelfUnits({ productId, need, value, onChange }: {
+  productId: string; need: number; value: { id: string; serialNo: string }[]; onChange: (v: { id: string; serialNo: string }[]) => void;
+}) {
+  const [units, setUnits] = useState<{ id: string; serialNo: string }[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    let gone = false;
+    unitsOnShelfAction(productId).then((r) => { if (!gone) { setUnits(r.units ?? []); setError(r.error ?? null); } });
+    return () => { gone = true; };
+  }, [productId]);
+  // Units already held for this challan are not "on the shelf" - they stay listed, ticked.
+  const all = [...value.filter((v) => !(units ?? []).some((u) => u.id === v.id)), ...(units ?? [])];
+  if (error) return <p className="text-xs text-danger">{error}</p>;
+  if (!units) return <p className="text-xs text-muted-foreground">Loading the serial numbers…</p>;
+  return (
+    <SerialChecks units={all} need={need} value={value.map((v) => v.id)}
+      onChange={(ids) => onChange(all.filter((u) => ids.includes(u.id)))} />
+  );
+}
+
+/** The store changes a serial on an issued GDN - the unit written down was not the one that went (22 Oct 2026). */
+export function SwapSerial({ lineId, productId, productName, units, onDone }: {
+  lineId: string; productId: string; productName: string; units: { id: string; serialNo: string }[]; onDone?: (msg: string) => void;
+}) {
+  const router = useRouter();
+  const [open, setOpen] = useState(false);
+  const [from, setFrom] = useState(units[0]?.id ?? '');
+  const [to, setTo] = useState<{ id: string; serialNo: string }[]>([]);
+  const [reason, setReason] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [pending, start] = useTransition();
+  if (!units.length) return null;
+  const save = () => start(async () => {
+    setError(null);
+    const r = await swapIssuedUnitAction(lineId, from, to[0]?.id ?? '', reason);
+    if (r.error) { setError(r.error); return; }
+    setOpen(false); onDone?.('Serial changed.'); router.refresh();
+  });
+  return (
+    <>
+      <button type="button" className="text-xs font-medium text-brand hover:underline" onClick={() => { setTo([]); setReason(''); setError(null); setOpen(true); }}>Change serial</button>
+      {open && (
+        <Modal title={`Change serial - ${productName}`} icon="refresh" onClose={() => setOpen(false)}
+          footer={<><Button onClick={() => setOpen(false)}>Back</Button><Button variant="primary" loading={pending} disabled={!from || to.length !== 1 || !reason.trim()} onClick={save}>Change serial</Button></>}>
+          <div className="grid gap-3">
+            {error && <p role="alert" className="text-sm text-danger">{error}</p>}
+            <Field label="Serial on the GDN" htmlFor="sw-from">
+              <select id="sw-from" value={from} onChange={(e) => setFrom(e.target.value)} className="field-input font-mono">
+                {units.map((u) => <option key={u.id} value={u.id}>{u.serialNo}</option>)}
+              </select>
+            </Field>
+            <div className="grid gap-1 text-sm"><span>The unit that really went</span><ShelfUnits productId={productId} need={1} value={to} onChange={setTo} /></div>
+            <Field label="Why" htmlFor="sw-why"><input id="sw-why" value={reason} onChange={(e) => setReason(e.target.value)} className="field-input" /></Field>
+            <p className="text-xs text-muted-foreground">The serial on the GDN goes back on the shelf; the one you pick goes to the customer. Stock count and cost do not change.</p>
+          </div>
+        </Modal>
+      )}
+    </>
   );
 }

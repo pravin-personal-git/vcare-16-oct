@@ -208,9 +208,11 @@ export function ComplaintView({ detail: d, coverage, technicians, legacyTechnici
   const toIssue = challans.filter((c) => c.status === 'approved').length;
   const toApprove = challans.filter((c) => c.status === 'pending_approval').length;
   const oldUnitsDue = (parts?.faulty ?? []).filter((f) => !f.receivedAt).length;
+  // Parts the technician marked unused - the office takes them back (Vcare, 22 Oct 2026).
+  const unusedBack = challans.reduce((n, c) => n + c.lines.filter((l) => l.qtyReturnPending > 0).length, 0);
   const next = nextStep({
     status: d.status, hasTech: !!d.assignedTechnicianId, techName: d.assignedTechnicianName,
-    openVisits: d.visits.filter((v) => v.status === 'scheduled').length, toApprove, toIssue, oldUnitsDue,
+    openVisits: d.visits.filter((v) => v.status === 'scheduled').length, toApprove, toIssue, oldUnitsDue, unusedBack,
     waitingEstimate: d.waitingEstimatePaise !== null, billed: !!d.invoice, billingStatus: d.billingStatus, closeNeedsApproval,
     itemsOut: liveItems.filter((i) => ['picked_up', 'with_supplier'].includes(i.status)).length,
     toHandBack: handBack.length,
@@ -695,11 +697,14 @@ export function ComplaintView({ detail: d, coverage, technicians, legacyTechnici
 /** The one thing to do next, in words. */
 function nextStep(s: {
   status: string; hasTech: boolean; techName: string | null; openVisits: number; toApprove: number; toIssue: number; oldUnitsDue: number;
+  unusedBack: number;
   waitingEstimate: boolean; billed: boolean; billingStatus: string; closeNeedsApproval: boolean;
   itemsOut: number; toHandBack: number; refitDue: boolean; unbilledPaise: number;
 }): string {
   if (s.status === 'cancelled') return 'Cancelled - nothing to do.';
   if (s.status === 'closed') return !s.billed && s.billingStatus === 'to_invoice' ? 'Closed, but not billed - use Bill this job.' : 'Closed - nothing to do.';
+  // Unused parts first: taking them back changes what the job bills.
+  if (s.unusedBack) return `${s.unusedBack} part${s.unusedBack === 1 ? ' was' : 's were'} marked unused - take ${s.unusedBack === 1 ? 'it' : 'them'} back in Parts.`;
   // Stage 7: the money before the close - the office's job, technician or not.
   if (s.status === 'resolved' && s.unbilledPaise > 0) return `Bill this job (₹${(s.unbilledPaise / 100).toLocaleString('en-IN')} with GST) - or Don't bill with a reason - before it can close.`;
   // Back with us (stage 6): the office hands it over, whoever the technician is.

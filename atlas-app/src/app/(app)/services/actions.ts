@@ -13,7 +13,7 @@ import {
 } from '@/server/complaints';
 import { resolveCoverageFor } from '@/server/amc';
 import { friendlyError } from '@/lib/friendly-error';
-import { cancelJobIssue, correctJobIssue, editJobChallan, issueJobChallan, serialChoices, logFaultyPart, raiseJobChallan, receiveFaultyPart, receiveReturnedParts, requestPartsReturn, returnUnusedParts, withdrawJobChallan } from '@/server/job-challans';
+import { cancelJobIssue, correctJobIssue, editJobChallan, issueJobChallan, serialChoices, logFaultyPart, raiseJobChallan, receiveFaultyPart, receiveReturnedParts, requestPartsReturn, returnUnusedParts, swapIssuedUnit, unitsOnShelf, withdrawJobChallan, type ChallanLineInput } from '@/server/job-challans';
 import { customerLinkToken, sendEstimate, type EstimateLine } from '@/server/job-customer';
 import { billJob, waiveJobBilling } from '@/server/job-billing';
 import { addComplaintItem, cancelComplaintItem, listCustomerEquipment, pickUpItems, requestWarrantyVoid, type ComplaintItemInput } from '@/server/complaint-items';
@@ -322,7 +322,7 @@ export async function updateRepairChallanAction(input: Omit<UpdateChallanInput, 
 
 // ------------------------------------------------ job challans & GDN (workflow slice 4)
 
-export async function raiseJobChallanAction(complaintId: string, input: { type: string; lines: { productId: string; qty: number }[]; note: string | null }): Promise<ActionState> {
+export async function raiseJobChallanAction(complaintId: string, input: { type: string; lines: ChallanLineInput[]; note: string | null }): Promise<ActionState> {
   return guard(async () => {
     const ctx = await requireContext();
     await raiseJobChallan(ctx.scope, complaintId, input, ctx.user.id, 'office');
@@ -330,7 +330,7 @@ export async function raiseJobChallanAction(complaintId: string, input: { type: 
 }
 
 /** Change a challan not yet approved (or rejected) - it goes for approval again (22 Oct 2026). */
-export async function editJobChallanAction(complaintId: string, challanId: string, input: { type: string; lines: { productId: string; qty: number }[]; note: string | null }): Promise<ActionState> {
+export async function editJobChallanAction(complaintId: string, challanId: string, input: { type: string; lines: ChallanLineInput[]; note: string | null }): Promise<ActionState> {
   return guard(async () => {
     const ctx = await requireContext();
     await editJobChallan(ctx.scope, challanId, { complaintId }, input, ctx.user.id, 'office');
@@ -366,17 +366,18 @@ export async function issueJobChallanAction(challanId: string, serials: Record<s
 export async function returnUnusedPartsAction(lineId: string, qty: number, unitIds?: string[], asRequest = false): Promise<ActionState> {
   return guard(async () => {
     const ctx = await requireContext();
-    // Serial items always come back as a request: the store ticks the serials when receiving.
-    if (ctx.permissions.has('stock.adjust') && !asRequest) await returnUnusedParts(ctx.scope, lineId, qty, ctx.user.id, unitIds);
+    // Serial items always come back as a request: whoever receives ticks the serials.
+    // The office takes parts straight back too (Vcare, 22 Oct 2026) - not only the store.
+    if (!asRequest) await returnUnusedParts(ctx.scope, lineId, qty, ctx.user.id, unitIds);
     else await requestPartsReturn(ctx.scope, lineId, qty, ctx.user.id);
   });
 }
 
-/** The store receives parts a technician said were coming back. */
+/** The store - or the office (22 Oct 2026) - receives parts a technician marked unused. */
 export async function receiveReturnedPartsAction(lineId: string, unitIds?: string[]): Promise<ActionState & { qty?: number }> {
   try {
     const ctx = await requireContext();
-    if (!ctx.permissions.has('stock.adjust')) return { error: 'Receiving parts needs stock rights (Roles > Stock: Edit).' };
+    if (!ctx.permissions.has('stock.adjust') && !ctx.permissions.has('complaints.edit')) return { error: 'Receiving parts needs stock rights or complaint rights.' };
     const qty = await receiveReturnedParts(ctx.scope, lineId, ctx.user.id, unitIds);
     refresh();
     return { ok: true, qty };
@@ -471,6 +472,30 @@ export async function correctJobIssueAction(challanId: string, lines: { lineId: 
   }
 }
 
+/** The store swaps a serial on an issued GDN - the unit written down was not the one that went (22 Oct 2026). */
+export async function swapIssuedUnitAction(lineId: string, fromUnitId: string, toUnitId: string, reason: string): Promise<ActionState> {
+  try {
+    const ctx = await requireContext();
+    if (!ctx.permissions.has('stock.adjust')) return { error: 'Changing a serial on a GDN needs stock rights (Roles > Stock: Edit).' };
+    await swapIssuedUnit(ctx.scope, lineId, fromUnitId, toUnitId, reason, ctx.user.id);
+    refresh();
+    return { ok: true };
+  } catch (e) {
+    return { error: friendlyError(e, e instanceof ComplaintError) };
+  }
+}
+
+/** A serial-number product's units on the shelf, to pick when raising a challan (22 Oct 2026). */
+export async function unitsOnShelfAction(productId: string): Promise<ActionState & { units?: { id: string; serialNo: string }[] }> {
+  try {
+    const ctx = await requireContext();
+    if (!ctx.permissions.has('complaints.edit') && !ctx.permissions.has('installations.edit')) return { error: 'You do not have permission to raise challans.' };
+    return { ok: true, units: await unitsOnShelf(ctx.scope, productId) };
+  } catch (e) {
+    return { error: friendlyError(e, e instanceof ComplaintError) };
+  }
+}
+
 /** The store cancels a GDN made by mistake - parts back in stock, challan back in the queue. */
 export async function cancelJobIssueAction(challanId: string, reason: string): Promise<ActionState> {
   try {
@@ -511,7 +536,7 @@ export async function waiveBillingAction(complaintId: string, reason: string): P
 }
 
 /** In-stock serial units for a challan's serial lines - the store picks which go on the GDN. */
-export async function serialChoicesAction(challanId: string): Promise<ActionState & { lines?: { lineId: string; productName: string; qty: number; units: { id: string; serialNo: string }[] }[] }> {
+export async function serialChoicesAction(challanId: string): Promise<ActionState & { lines?: { lineId: string; productName: string; qty: number; picked: string[]; units: { id: string; serialNo: string }[] }[] }> {
   try {
     const ctx = await requireContext();
     if (!ctx.permissions.has('stock.adjust')) return { error: 'Issuing parts needs stock rights (Roles > Stock: Edit).' };

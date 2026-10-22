@@ -12,7 +12,7 @@ import {
   editJobChallanAction, logFaultyPartAction, raiseJobChallanAction, receiveFaultyPartAction, returnUnusedPartsAction, withdrawJobChallanAction,
 } from '../../actions';
 import { installEditChallanAction, installRaiseChallanAction, installWithdrawChallanAction } from '../../installations/actions';
-import { GdnFix, IssueParts, ReceiveBack, ReceiveWithSerial } from '@/components/services/GdnFix';
+import { GdnFix, IssueParts, ReceiveBack, ReceiveWithSerial, ShelfUnits, SwapSerial } from '@/components/services/GdnFix';
 
 /**
  * Parts on a job (workflow slice 4, spec §4.4): job challans with their
@@ -59,6 +59,10 @@ export function JobParts({ complaintId, installationChallanId, challans, faulty,
   const [logging, setLogging] = useState(false);
   const [editing, setEditing] = useState<ChallanVM | null>(null);
   const [withdrawing, setWithdrawing] = useState<ChallanVM | null>(null);
+  /** "Need more" on an issued challan: a new challan, approved like any other (22 Oct 2026). */
+  const [moreFor, setMoreFor] = useState<string | null>(null);
+  // What the technician marked unused, waiting to be taken back - shown at the top for the office.
+  const comingBack = challans.flatMap((c) => c.lines.filter((l) => l.qtyReturnPending > 0).map((l) => ({ c, l })));
   const run = (fn: () => Promise<{ error?: string }>) => start(async () => {
     setError(null);
     const r = await fn();
@@ -73,6 +77,20 @@ export function JobParts({ complaintId, installationChallanId, challans, faulty,
         {canEdit && !actionsElsewhere && <Button size="sm" icon="plus" onClick={() => setRaising(true)}>Raise challan</Button>}
       </div>
       {error && <p role="alert" className="mt-2 text-sm text-danger">{error}</p>}
+      {comingBack.length > 0 && (
+        <div role="status" className="mt-3 rounded-lg border border-warning/40 bg-warning/10 p-3 text-sm">
+          <p className="font-semibold text-warning">Marked unused - take them back</p>
+          <ul className="mt-1.5 grid gap-1.5">
+            {comingBack.map(({ c, l }) => (
+              <li key={l.id} className="flex flex-wrap items-center gap-2">
+                <span>{l.productName}: <strong className="tabular-nums">{l.qtyReturnPending}</strong> unused</span>
+                <span className="font-mono text-xs text-muted-foreground">{c.gdnNos[0] ?? c.challanNo}</span>
+                {(canEdit || canIssue) && <ReceiveBack lineId={l.id} qty={l.qtyReturnPending} serial={l.serial} units={l.units} />}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
       <ul className="mt-3 flex flex-col divide-y divide-border">
         {challans.length === 0 && <li className="py-1 text-sm text-muted-foreground">{installationChallanId
           ? 'No material challans. Cable, clamps and anything else not on the order go out on one.'
@@ -95,16 +113,26 @@ export function JobParts({ complaintId, installationChallanId, challans, faulty,
               {c.lines.map((l) => (
                 <li key={l.id} className="flex flex-wrap items-center gap-2 py-0.5">
                   <span><ProductLink id={l.productId}>{l.productName}</ProductLink> × {l.qty}</span>
+                  {/* The serial numbers on the line - reserved when raised, or out on the GDN (22 Oct 2026). */}
+                  {(l.units ?? []).length > 0 && (
+                    <span className="flex flex-wrap items-center gap-1">
+                      {l.units!.map((u) => <span key={u.id} className="rounded bg-brand/10 px-1.5 font-mono text-xs text-brand">{u.serialNo}</span>)}
+                      {l.qtyIssued === 0 && <Badge tone="info">reserved</Badge>}
+                    </span>
+                  )}
+                  {l.serial && !(l.units ?? []).length && l.qtyIssued === 0 && ['pending_approval', 'approved'].includes(c.status) && (
+                    <span className="text-xs text-muted-foreground">serial: the store picks it</span>
+                  )}
                   {/* What really left the store (live test 2): issued · returned · used. */}
                   {l.qtyIssued > 0 && <span className="text-xs text-muted-foreground tabular-nums">{l.qtyIssued} issued · {l.qtyReturned} returned · <strong className="text-foreground">{l.qtyIssued - l.qtyReturned} used</strong></span>}
                   {l.qtyReturnPending > 0 && (
-                    <span className="text-xs text-warning">{l.qtyReturnPending} coming back - the store receives them</span>
-                  )}
-                  {canIssue && l.qtyReturnPending > 0 && (
-                    <ReceiveBack lineId={l.id} qty={l.qtyReturnPending} serial={l.serial} units={l.units} />
+                    <span className="text-xs text-warning">{l.qtyReturnPending} marked unused - take them back above</span>
                   )}
                   {(canEdit || canIssue) && c.status === 'issued' && l.qtyIssued - l.qtyReturned - l.qtyReturnPending > 0 && (
-                    <ReturnUnused max={l.qtyIssued - l.qtyReturned - l.qtyReturnPending} store={canIssue && !l.serial} busy={pending} onReturn={(n) => run(() => returnUnusedPartsAction(l.id, n, undefined, !!l.serial))} />
+                    <ReturnUnused max={l.qtyIssued - l.qtyReturned - l.qtyReturnPending} store={!l.serial} busy={pending} onReturn={(n) => run(() => returnUnusedPartsAction(l.id, n, undefined, !!l.serial))} />
+                  )}
+                  {canIssue && c.status === 'issued' && l.serial && l.productId && (l.units ?? []).length > 0 && (
+                    <SwapSerial lineId={l.id} productId={l.productId} productName={l.productName} units={l.units ?? []} />
                   )}
                 </li>
               ))}
@@ -122,6 +150,9 @@ export function JobParts({ complaintId, installationChallanId, challans, faulty,
             )}
             {c.status === 'issued' && canIssue && c.gdnNos[0] && (
               <div className="mt-1"><GdnFix challanId={c.id} gdnNo={c.gdnNos[0]} lines={c.lines} /></div>
+            )}
+            {c.status === 'issued' && canEdit && c.type !== 'handback' && (
+              <button type="button" className="mt-1 text-xs font-medium text-brand hover:underline" onClick={() => { setMoreFor(c.challanNo); setRaising(true); }}>Need more - raise for approval</button>
             )}
             {c.status === 'approved' && canIssue && (
               <div className="mt-1.5"><IssueParts challanId={c.id} hasSerial={c.lines.some((l) => l.serial)} label="Issue parts (create GDN)" /></div>
@@ -149,15 +180,15 @@ export function JobParts({ complaintId, installationChallanId, challans, faulty,
       </>}
       <p className="mt-2 text-xs text-muted-foreground">The store&apos;s queue: <Link href="/goods-dispatch/job-parts" className="text-brand hover:underline">Parts counter</Link></p>
 
-      {raising && <RaiseChallan catalogue={catalogue} busy={pending} onClose={() => setRaising(false)}
-        installation={!!installationChallanId}
+      {raising && <RaiseChallan catalogue={catalogue} busy={pending} onClose={() => { setRaising(false); setMoreFor(null); }}
+        installation={!!installationChallanId} noteHint={moreFor ? `More for ${moreFor}` : undefined}
         onSave={(input) => {
-          setRaising(false);
+          setRaising(false); setMoreFor(null);
           run(() => (installationChallanId ? installRaiseChallanAction(installationChallanId, input) : raiseJobChallanAction(complaintId ?? '', input)));
         }} />}
       {editing && <RaiseChallan catalogue={catalogue} busy={pending} onClose={() => setEditing(null)}
         installation={!!installationChallanId}
-        initial={{ challanNo: editing.challanNo, type: editing.type, note: editing.note, lines: editing.lines.filter((l) => l.productId).map((l) => ({ productId: l.productId as string, name: l.productName, qty: l.qty })) }}
+        initial={{ challanNo: editing.challanNo, type: editing.type, note: editing.note, lines: editing.lines.filter((l) => l.productId).map((l) => ({ productId: l.productId as string, name: l.productName, qty: l.qty, units: l.qtyIssued === 0 ? l.units ?? [] : [] })) }}
         onSave={(input) => {
           const id = editing.id;
           setEditing(null);
@@ -175,7 +206,10 @@ export function JobParts({ complaintId, installationChallanId, challans, faulty,
   );
 }
 
-/** Store (Stock: Edit): straight into stock. Anyone else: "coming back", the store receives it. */
+/**
+ * Plain parts: straight back into stock - the store, or the office (Vcare, 22
+ * Oct 2026). Serial parts: "coming back", and whoever receives ticks the serials.
+ */
 function ReturnUnused({ max, store, busy, onReturn }: { max: number; store: boolean; busy: boolean; onReturn: (n: number) => void }) {
   const [open, setOpen] = useState(false);
   const [n, setN] = useState(1);
@@ -189,26 +223,39 @@ function ReturnUnused({ max, store, busy, onReturn }: { max: number; store: bool
   );
 }
 
-export function RaiseChallan({ catalogue, busy, onClose, onSave, installation = false, initial }: {
+type Unit = { id: string; serialNo: string };
+
+export function RaiseChallan({ catalogue, busy, onClose, onSave, installation = false, initial, noteHint }: {
   catalogue: FindableProduct[]; busy: boolean; onClose: () => void;
   /** An installation's challan: material only - a replacement is a complaint's job (R3). */
   installation?: boolean;
   /** Changing a challan already raised (22 Oct 2026): its lines, note and type to start from. */
-  initial?: { challanNo: string; type: string; note: string | null; lines: { productId: string; name: string; qty: number }[] };
-  onSave: (input: { type: string; lines: { productId: string; qty: number }[]; note: string | null }) => void;
+  initial?: { challanNo: string; type: string; note: string | null; lines: { productId: string; name: string; qty: number; units?: Unit[] }[] };
+  /** A note to start from - "More for JCH-…" when more is needed on an issued challan. */
+  noteHint?: string;
+  onSave: (input: { type: string; lines: { productId: string; qty: number; unitIds: string[] }[]; note: string | null }) => void;
 }) {
   const [type, setType] = useState(initial?.type ?? 'material');
   const [pick, setPick] = useState('');
   const [qty, setQty] = useState(1);
-  const [lines, setLines] = useState<{ productId: string; qty: number }[]>(initial?.lines.map((l) => ({ productId: l.productId, qty: l.qty })) ?? []);
-  const [note, setNote] = useState(initial?.note ?? '');
+  /**
+   * Serial numbers (22 Oct 2026): the office names the units of a serial
+   * product on the line - reserved at once, and with every serial line named
+   * the GDN goes out on approval by itself. None named: the store picks.
+   */
+  const [pickUnits, setPickUnits] = useState<Unit[]>([]);
+  const [lines, setLines] = useState<{ productId: string; qty: number; units: Unit[] }[]>(initial?.lines.map((l) => ({ productId: l.productId, qty: l.qty, units: l.units ?? [] })) ?? []);
+  const [note, setNote] = useState(initial?.note ?? noteHint ?? '');
   // A line already on the challan keeps its name even if the catalogue here no longer lists it.
   const name = (id: string) => catalogue.find((p) => p.id === id)?.name ?? initial?.lines.find((l) => l.productId === id)?.name ?? id;
+  const isSerial = (id: string) => !!catalogue.find((p) => p.id === id)?.serial;
   const setLineQty = (id: string, n: number) => setLines(lines.map((l) => (l.productId === id ? { ...l, qty: n } : l)));
-  const valid = lines.length > 0 && lines.every((l) => l.qty > 0);
+  const unitsOk = (l: { qty: number; units: Unit[] }) => l.units.length === 0 || l.units.length === l.qty;
+  const valid = lines.length > 0 && lines.every((l) => l.qty > 0 && unitsOk(l));
+  const choose = (id: string) => { setPick(id); setPickUnits([]); };
   return (
     <Modal title={initial ? `Change challan ${initial.challanNo}` : 'Raise challan'} icon="truck" size="lg" onClose={onClose}
-      footer={<><Button onClick={onClose}>Cancel</Button><Button variant="primary" loading={busy} disabled={!valid} onClick={() => onSave({ type, lines, note: note.trim() || null })}>{initial ? 'Send for approval again' : 'Send for approval'}</Button></>}>
+      footer={<><Button onClick={onClose}>Cancel</Button><Button variant="primary" loading={busy} disabled={!valid} onClick={() => onSave({ type, lines: lines.map((l) => ({ productId: l.productId, qty: l.qty, unitIds: l.units.map((u) => u.id) })), note: note.trim() || null })}>{initial ? 'Send for approval again' : 'Send for approval'}</Button></>}>
       {initial && <p className="mb-3 text-xs text-muted-foreground">The approver sees the changed challan as a new request. Nothing has left the store yet, so no stock moves.</p>}
       <div className="grid gap-3">
         <Field label="Type" htmlFor="jc-type">
@@ -218,20 +265,37 @@ export function RaiseChallan({ catalogue, busy, onClose, onSave, installation = 
             <option value="installation">Installation - new equipment</option>
           </select>
         </Field>
-        <ProductFinder products={catalogue} pickedId={pick} onPick={setPick} />
+        <ProductFinder products={catalogue} pickedId={pick} onPick={choose}
+          onPickUnit={(u) => { if (isSerial(u.productId)) { setPickUnits([{ id: u.unitId, serialNo: u.serialNo }]); setQty(1); } }} />
         <div className="flex items-end gap-2">
           <Field label="Quantity" htmlFor="jc-qty"><input id="jc-qty" type="number" min={1} value={qty} onChange={(e) => setQty(Number(e.target.value))} className="field-input w-24" /></Field>
-          <Button disabled={!pick || !(qty > 0)} onClick={() => { setLines([...lines.filter((l) => l.productId !== pick), { productId: pick, qty }]); setPick(''); setQty(1); }}>Add line</Button>
+          <Button disabled={!pick || !(qty > 0) || (pickUnits.length > 0 && pickUnits.length !== qty)}
+            onClick={() => { setLines([...lines.filter((l) => l.productId !== pick), { productId: pick, qty, units: pickUnits }]); setPick(''); setQty(1); setPickUnits([]); }}>Add line</Button>
         </div>
+        {pick && isSerial(pick) && (
+          <div className="grid gap-1 text-sm">
+            <span>Serial numbers <span className="text-xs text-muted-foreground">- pick {qty} to reserve them and send the GDN out on approval, or none and the store picks</span></span>
+            <ShelfUnits productId={pick} need={qty} value={pickUnits} onChange={setPickUnits} />
+          </div>
+        )}
         {lines.length > 0 && (
           <ul className="rounded-lg border border-border text-sm">
             {lines.map((l) => (
-              <li key={l.productId} className="flex items-center justify-between gap-2 border-b border-border px-3 py-1.5 last:border-0">
-                <span className="min-w-0 flex-1 truncate">{name(l.productId)}</span>
-                {/* The quantity can be changed right here - mostly what "change the challan" means. */}
-                <input type="number" min={1} aria-label={`Quantity of ${name(l.productId)}`} value={l.qty}
-                  onChange={(e) => setLineQty(l.productId, Number(e.target.value))} className="field-input h-8 w-20" />
-                <button type="button" className="text-xs text-danger" onClick={() => setLines(lines.filter((x) => x.productId !== l.productId))}>Remove</button>
+              <li key={l.productId} className="grid gap-1 border-b border-border px-3 py-1.5 last:border-0">
+                <span className="flex items-center justify-between gap-2">
+                  <span className="min-w-0 flex-1 truncate">{name(l.productId)}</span>
+                  {/* The quantity can be changed right here - mostly what "change the challan" means. */}
+                  <input type="number" min={1} aria-label={`Quantity of ${name(l.productId)}`} value={l.qty}
+                    onChange={(e) => setLineQty(l.productId, Number(e.target.value))} className="field-input h-8 w-20" />
+                  <button type="button" className="text-xs text-danger" onClick={() => setLines(lines.filter((x) => x.productId !== l.productId))}>Remove</button>
+                </span>
+                {l.units.length > 0 && (
+                  <span className="flex flex-wrap items-center gap-1">
+                    {l.units.map((u) => <span key={u.id} className="rounded bg-brand/10 px-1.5 font-mono text-xs text-brand">{u.serialNo}</span>)}
+                    <button type="button" className="text-xs text-muted-foreground hover:underline" onClick={() => setLines(lines.map((x) => (x.productId === l.productId ? { ...x, units: [] } : x)))}>clear</button>
+                  </span>
+                )}
+                {!unitsOk(l) && <span className="text-xs text-danger">{l.units.length} serial{l.units.length === 1 ? '' : 's'} for {l.qty} - match the quantity, or clear them.</span>}
               </li>
             ))}
           </ul>
