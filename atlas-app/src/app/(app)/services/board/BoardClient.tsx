@@ -27,7 +27,8 @@ import { CUSTOMISABLE_PAGES, isOverdue, paletteVar, visibleColumns } from '@/lib
  *     without shouting.
  *
  *  3. NO WAY TO NARROW IT. Six columns and no filters is a wall. There is now
- *     a technician filter, a customer filter and a priority filter, plus a
+ *     a technician filter, a customer filter, a priority filter and a stage
+ *     filter (Vcare, 22 Oct 2026), plus a
  *     list view for when the board has outgrown a board.
  *
  * Filtering is client-side on purpose: the page already holds every open job,
@@ -81,23 +82,31 @@ export function BoardClient({ jobs, columns, columnStatus, canSeeEveryone, custo
   const [tech, setTech] = useState('');
   const [customer, setCustomer] = useState('');
   const [priority, setPriority] = useState('');
+  const [stage, setStage] = useState('');
   const [lateOnly, setLateOnly] = useState(false);
 
   const techs = useMemo(() => [...new Set(jobs
     .map((j) => j.assignedTechnicianName)
     .filter((n): n is string => !!n))].sort(), [jobs]);
   const customers = useMemo(() => [...new Set(jobs.map((j) => j.customerName))].sort(), [jobs]);
+  /** Every stage an open job is in, under the branch's own name, in board order. */
+  const stages = useMemo(() => {
+    const seen = new Map<string, { label: string; col: number }>();
+    for (const j of jobs) if (!seen.has(j.status)) seen.set(j.status, { label: j.statusLabel, col: columns.indexOf(j.columnTitle) });
+    return [...seen].sort((a, b) => a[1].col - b[1].col || a[1].label.localeCompare(b[1].label));
+  }, [jobs, columns]);
 
   const shown = useMemo(() => jobs.filter((j) => {
     if (tech === '__none') { if (j.assignedTechnicianName) return false; }
     else if (tech && j.assignedTechnicianName !== tech) return false;
     if (customer && j.customerName !== customer) return false;
     if (priority && j.priority !== priority) return false;
+    if (stage && j.status !== stage) return false;
     if (lateOnly && j.mark !== 'missed') return false;
     return true;
-  }), [jobs, tech, customer, priority, lateOnly]);
+  }), [jobs, tech, customer, priority, stage, lateOnly]);
 
-  const filtering = !!(tech || customer || priority || lateOnly);
+  const filtering = !!(tech || customer || priority || stage || lateOnly);
   const late = jobs.filter((j) => j.mark === 'missed').length;
   const sel = 'h-8 rounded-md border border-border bg-card px-2 text-xs outline-none focus:border-brand';
 
@@ -144,6 +153,10 @@ export function BoardClient({ jobs, columns, columnStatus, canSeeEveryone, custo
           <option value="normal">Normal</option>
           <option value="low">Low</option>
         </select>
+        <select value={stage} onChange={(e) => setStage(e.target.value)} className={sel} aria-label="Stage">
+          <option value="">Every stage</option>
+          {stages.map(([status, s]) => <option key={status} value={status}>{s.label}</option>)}
+        </select>
 
         {/*
           The one count worth a button. "Late" is the question somebody opens
@@ -162,7 +175,7 @@ export function BoardClient({ jobs, columns, columnStatus, canSeeEveryone, custo
         {filtering && (
           <button
             type="button"
-            onClick={() => { setTech(''); setCustomer(''); setPriority(''); setLateOnly(false); }}
+            onClick={() => { setTech(''); setCustomer(''); setPriority(''); setStage(''); setLateOnly(false); }}
             className="ms-auto inline-flex items-center gap-1 text-xs font-medium text-brand hover:underline"
           >
             <Icon name="x" className="h-3 w-3" /> Clear filters
