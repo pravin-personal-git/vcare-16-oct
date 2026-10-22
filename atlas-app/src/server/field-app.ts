@@ -112,12 +112,13 @@ export async function technicianInstallation(scope: StoreScope, challanId: strin
         select: {
           id: true, orderNo: true, customerName: true, organizationName: true,
           phone: true, shippingAddress: true, billingAddress: true,
+          items: { select: { dispatchedQty: true } },
         },
       },
       items: {
         orderBy: { srNo: 'asc' },
         select: {
-          id: true, productId: true, productName: true, qty: true, unit: true,
+          id: true, productId: true, productName: true, qty: true, unit: true, qtyReturned: true, qtyReturnPending: true,
           barcode: true, stockUnitId: true, placement: true, fitStatus: true, serialNo: true,
           stockUnit: { select: { serialNo: true } },
           product: { select: { productCode: true, trackingMode: true } },
@@ -169,7 +170,12 @@ export async function technicianInstallation(scope: StoreScope, challanId: strin
       fitStatus: i.fitStatus,
       scannable: i.product?.trackingMode === 'serial',
       scanned: !!i.stockUnitId,
+      // Unused, back against the order's GDN (R2, 22 Oct 2026).
+      qtyReturned: i.qtyReturned,
+      qtyReturnPending: i.qtyReturnPending,
     })),
+    // The order's goods have left on its GDN - before that nothing can come back.
+    dispatched: (c.salesOrder?.items ?? []).some((i) => i.dispatchedQty > 0),
   };
 }
 

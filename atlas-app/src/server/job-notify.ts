@@ -98,6 +98,41 @@ export async function jobEvent(complaintId: string, event: JobEvent, detail = ''
 }
 
 /**
+ * The same events for an INSTALLATION's parts (22 Oct 2026, R2/R3): material
+ * challans and unused goods coming back. Its technicians are the team on the
+ * challan; the store and office are found as for a complaint. The customer is
+ * never told about parts. Never throws.
+ */
+export async function installationEvent(installationChallanId: string, event: JobEvent, detail = ''): Promise<void> {
+  try {
+    const c = await db.installationChallan.findUnique({
+      where: { id: installationChallanId },
+      select: { id: true, storeId: true, challanNo: true, assignees: { select: { userId: true } } },
+    });
+    if (!c) return;
+    const plan = PLAN[event];
+    const staff = new Set<string>();
+    if (plan.to.includes('tech')) for (const a of c.assignees) staff.add(a.userId);
+    if (plan.to.includes('office')) for (const id of await ownersOf(c.storeId)) staff.add(id);
+    if (plan.to.includes('store')) {
+      const store = await db.user.findMany({
+        where: { isActive: true, storeRoles: { some: { storeId: c.storeId, role: { permissions: { some: { permission: { key: 'stock.adjust' } } } } } } },
+        select: { id: true }, take: FEED_MAX_ROWS,
+      });
+      for (const u of store) staff.add(u.id);
+    }
+    if (!staff.size) return;
+    await notify({
+      storeId: c.storeId, userIds: [...staff], kind: 'job', title: plan.title(c.challanNo, detail), body: null,
+      href: ['challan_to_issue', 'parts_returning', 'gdn_auto'].includes(event) ? '/goods-dispatch/job-parts' : `/services/installations/${c.id}`,
+      entityType: 'installation_challan', entityId: c.id, dedupeKey: `install:${event}:${c.id}:${Date.now()}`,
+    });
+  } catch (e) {
+    console.error(`[job-notify] installation ${event} failed`, e);
+  }
+}
+
+/**
  * Deadlines (spec §4.9): near -> remind the technician, missed -> alert the
  * office. Each once per job per deadline (dedupe). Runs with the reminder
  * sweep (page loads, throttled, and the 08:00 cron).

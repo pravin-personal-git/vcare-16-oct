@@ -6,18 +6,20 @@ import { useRouter } from 'next/navigation';
 import { useState, useTransition } from 'react';
 import { Badge, Card, PageHeader, SectionCard } from '@/components/ui/Layout';
 import { receiveFaultyPartAction } from '../../services/actions';
-import { GdnFix, IssueParts, ReceiveBack, ReceiveWithSerial } from '@/components/services/GdnFix';
+import { GdnFix, IssueParts, ReceiveBack, ReceiveInstallBack, ReceiveWithSerial } from '@/components/services/GdnFix';
 import { AutoRefresh } from '@/components/ui/AutoRefresh';
 
 interface Challan {
-  id: string; challanNo: string; complaintId: string; complaintNo: string; customerId?: string; customerName: string; type: string; status: string;
+  id: string; challanNo: string; complaintNo: string; jobHref: string; customerId?: string; customerName: string; type: string; status: string;
   createdAt: string; createdByName: string | null; note: string | null;
   lines: { id: string; productName: string; productCode: string; qty: number; qtyIssued: number; qtyReturned: number; qtyReturnPending: number; serial?: boolean; units?: { id: string; serialNo: string }[] }[];
   gdnNos: string[];
   /** Products the branch does not have enough of - why an approved challan is still waiting. */
   short?: string[];
 }
-interface Returning { lineId: string; qty: number; serial?: boolean; units?: { id: string; serialNo: string }[]; productName: string; productCode: string; challanNo: string; gdnNo: string | null; complaintId: string; complaintNo: string }
+interface Returning { lineId: string; qty: number; serial?: boolean; units?: { id: string; serialNo: string }[]; productName: string; productCode: string; challanNo: string; gdnNo: string | null; complaintNo: string; jobHref: string }
+/** An installation's goods coming back against its order's GDN (R2, 22 Oct 2026). */
+interface InstallReturning { itemId: string; qty: number; productName: string; productCode: string; serialNo: string | null; challanId: string; challanNo: string; orderNo: string | null }
 interface Faulty { id: string; complaintId: string; complaintNo: string; description: string; serialNo: string | null; productName: string | null; loggedAt: string }
 
 const when = (iso: string) => new Date(iso).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
@@ -34,8 +36,8 @@ const newest = <T,>(at: (x: T) => string) => (a: T, b: T) => at(b).localeCompare
  * approved challan that is still here says why (serials to pick, or which
  * part is short).
  */
-export function JobPartsQueue({ challans, faulty, returns = [], canIssue, autoGdn = true }: {
-  challans: Challan[]; faulty: Faulty[]; returns?: Returning[]; canIssue: boolean; autoGdn?: boolean;
+export function JobPartsQueue({ challans, faulty, returns = [], installReturns = [], canIssue, autoGdn = true }: {
+  challans: Challan[]; faulty: Faulty[]; returns?: Returning[]; installReturns?: InstallReturning[]; canIssue: boolean; autoGdn?: boolean;
 }) {
   const router = useRouter();
   const [pending, start] = useTransition();
@@ -58,8 +60,9 @@ export function JobPartsQueue({ challans, faulty, returns = [], canIssue, autoGd
   const issued = challans.filter((c) => c.status === 'issued' && matchC(c)).sort(newest((c) => c.createdAt));
   const back = returns.filter((r) => hit(r.complaintNo, r.productName, r.productCode, r.challanNo, r.gdnNo));
   const broken = faulty.filter((f) => hit(f.complaintNo, f.description, f.productName, f.serialNo));
+  const fitted = installReturns.filter((r) => hit(r.challanNo, r.orderNo, r.productName, r.productCode, r.serialNo));
 
-  const job = (id: string, no: string) => <Link href={`/services/complaints/${id}`} className="font-mono text-brand hover:underline">{no}</Link>;
+  const job = (href: string, no: string) => <Link href={href} className="font-mono text-brand hover:underline">{no}</Link>;
   const empty = (text: string) => <p className="px-3 py-3 text-sm text-muted-foreground">{text}</p>;
   const row = 'grid gap-1.5 border-b border-border px-3 py-2.5 text-sm last:border-0';
 
@@ -97,10 +100,10 @@ export function JobPartsQueue({ challans, faulty, returns = [], canIssue, autoGd
         <SectionCard title={`1. Waiting for approval (${waiting.length})`} icon="clock" bodyClassName="p-0">
           {waiting.length === 0 ? empty('None. With "No approval needed" (Settings › Approval Rules) challans skip this step.') : waiting.map((c) => (
             <div key={c.id} className={row}>
-              <p className="flex flex-wrap items-center gap-x-2 gap-y-1"><span className="font-mono font-semibold">{c.challanNo}</span>{job(c.complaintId, c.complaintNo)}</p>
+              <p className="flex flex-wrap items-center gap-x-2 gap-y-1"><span className="font-mono font-semibold">{c.challanNo}</span>{job(c.jobHref, c.complaintNo)}</p>
               <p className="text-xs text-muted-foreground">{c.createdByName ?? '-'} · {when(c.createdAt)}</p>
               <p>{c.lines.map((l) => `${l.productName} × ${l.qty}`).join(', ')}</p>
-              <p className="text-xs"><Link href={`/services/complaints/${c.complaintId}`} className="text-brand hover:underline">Approve or reject on the job</Link></p>
+              <p className="text-xs"><Link href={c.jobHref} className="text-brand hover:underline">Approve or reject on the job</Link></p>
             </div>
           ))}
         </SectionCard>
@@ -111,7 +114,7 @@ export function JobPartsQueue({ challans, faulty, returns = [], canIssue, autoGd
             return (
               <div key={c.id} data-row-id={c.id} className={row}>
                 <p className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                  <span className="font-mono font-semibold">{c.challanNo}</span>{job(c.complaintId, c.complaintNo)}<Badge tone="neutral">{c.type}</Badge>
+                  <span className="font-mono font-semibold">{c.challanNo}</span>{job(c.jobHref, c.complaintNo)}<Badge tone="neutral">{c.type}</Badge>
                 </p>
                 <p className="text-xs"><CustomerLink id={c.customerId}>{c.customerName}</CustomerLink> · <span className="text-muted-foreground">{c.createdByName ?? '-'} · {when(c.createdAt)}</span></p>
                 <p>{c.lines.map((l) => `${l.productName} (${l.productCode}) × ${l.qty}`).join(' · ')}</p>
@@ -130,7 +133,7 @@ export function JobPartsQueue({ challans, faulty, returns = [], canIssue, autoGd
         <SectionCard title={`3. Issued - hand over (${issued.length})`} icon="check-circle" bodyClassName="p-0">
           {issued.length === 0 ? empty('None in the last 7 days.') : issued.map((c) => (
             <div key={c.id} data-row-id={c.id} className={row}>
-              <p className="flex flex-wrap items-center gap-x-2 gap-y-1"><span className="font-mono font-semibold text-brand">{c.gdnNos[0] ?? c.challanNo}</span>{job(c.complaintId, c.complaintNo)}</p>
+              <p className="flex flex-wrap items-center gap-x-2 gap-y-1"><span className="font-mono font-semibold text-brand">{c.gdnNos[0] ?? c.challanNo}</span>{job(c.jobHref, c.complaintNo)}</p>
               <p className="text-xs text-muted-foreground">{c.customerName} · {when(c.createdAt)}</p>
               <p>{c.lines.map((l) => `${l.productName}: ${l.qtyIssued} issued${l.qtyReturned ? `, ${l.qtyReturned} returned, ${l.qtyIssued - l.qtyReturned} used` : ''}`).join('; ')}</p>
               {c.lines.some((l) => (l.units ?? []).length) && (
@@ -141,19 +144,26 @@ export function JobPartsQueue({ challans, faulty, returns = [], canIssue, autoGd
           ))}
         </SectionCard>
 
-        <SectionCard title={`4. Coming back (${back.length + broken.length})`} icon="refresh" bodyClassName="p-0">
-          {back.length + broken.length === 0 ? empty('Nothing on its way back.') : (
+        <SectionCard title={`4. Coming back (${back.length + fitted.length + broken.length})`} icon="refresh" bodyClassName="p-0">
+          {back.length + fitted.length + broken.length === 0 ? empty('Nothing on its way back.') : (
             <>
               {back.map((r) => (
                 <div key={r.lineId} className={row}>
-                  <p className="flex flex-wrap items-center gap-x-2 gap-y-1"><Badge tone="info">Unused</Badge>{job(r.complaintId, r.complaintNo)}</p>
+                  <p className="flex flex-wrap items-center gap-x-2 gap-y-1"><Badge tone="info">Unused</Badge>{job(r.jobHref, r.complaintNo)}</p>
                   <p><strong>{r.productName} × {r.qty}</strong> · <span className="font-mono">{r.gdnNo ?? r.challanNo}</span></p>
                   {canIssue && <div><ReceiveBack lineId={r.lineId} qty={r.qty} serial={r.serial} units={r.units} onDone={(m) => setMsg({ ok: true, text: m })} /></div>}
                 </div>
               ))}
+              {fitted.map((r) => (
+                <div key={r.itemId} className={row}>
+                  <p className="flex flex-wrap items-center gap-x-2 gap-y-1"><Badge tone="info">Unused - installation</Badge>{job(`/services/installations/${r.challanId}`, r.challanNo)}</p>
+                  <p><strong>{r.productName} × {r.qty}</strong>{r.serialNo ? <span className="font-mono"> · S/N {r.serialNo}</span> : null}{r.orderNo ? <span className="text-muted-foreground"> · back against {r.orderNo}</span> : null}</p>
+                  {canIssue && <div><ReceiveInstallBack challanId={r.challanId} itemId={r.itemId} qty={r.qty} onDone={(m) => setMsg({ ok: true, text: m })} /></div>}
+                </div>
+              ))}
               {broken.map((f) => (
                 <div key={f.id} className={row}>
-                  <p className="flex flex-wrap items-center gap-x-2 gap-y-1"><Badge tone="warning">{f.description.startsWith('Old unit') ? 'Old unit' : 'Faulty'}</Badge>{job(f.complaintId, f.complaintNo)}</p>
+                  <p className="flex flex-wrap items-center gap-x-2 gap-y-1"><Badge tone="warning">{f.description.startsWith('Old unit') ? 'Old unit' : 'Faulty'}</Badge>{job(`/services/complaints/${f.complaintId}`, f.complaintNo)}</p>
                   <p>{f.description}{f.productName ? ` (${f.productName})` : ''}{f.serialNo ? ` · S/N ${f.serialNo}` : ''}</p>
                   <p className="text-xs text-muted-foreground">{when(f.loggedAt)}</p>
                   {canIssue && <ReceiveWithSerial busy={pending} onReceive={(serial) => run(() => receiveFaultyPartAction(f.id, serial), (r) => r.caseNo ? `Received. Replacements case ${r.caseNo} opened - send it to the supplier or scrap it from Services > Replacements.` : 'Received at the store.')} />}

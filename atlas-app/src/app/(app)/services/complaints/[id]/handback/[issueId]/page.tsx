@@ -42,7 +42,8 @@ export default async function HandBackPage({ params }: { params: Promise<{ id: s
       },
     },
   });
-  if (!mi) notFound();
+  // A hand-back is always a complaint's (an installation's challan carries material, R3).
+  if (!mi || !mi.challan.complaint) notFound();
   const job = mi.challan.complaint;
   const staff = mi.issuedBy ? await db.user.findUnique({ where: { id: mi.issuedBy }, select: { fullName: true } }) : null;
   // What went out of our stock in place of kept items: by serial when it has one, else by product.

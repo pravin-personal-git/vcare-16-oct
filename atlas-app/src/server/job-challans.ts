@@ -1,4 +1,5 @@
 import 'server-only';
+import type { Prisma } from '@prisma/client';
 import { db } from './db';
 import { publicBrandUrl } from './storage';
 import { scopeForWrite, scopeWhere, type StoreScope } from './store-scope';
@@ -9,10 +10,10 @@ import { raiseApproval, openApprovalRequest, decideApprovalStep, HierarchyError 
 import { postJournalEntry } from './ledger';
 import { costsFor } from './product-cost';
 import { resolveCoverageFor } from './amc';
-import { repairCostAccount } from '@/lib/service-revenue';
+import { ACCOUNT, repairCostAccount } from '@/lib/service-revenue';
 import { FEED_MAX_ROWS, LIST_MAX_ROWS } from '@/lib/list-limits';
-import { jobEvent } from './job-notify';
-import { assertActionAllowed } from './flow-gate';
+import { installationEvent, jobEvent, type JobEvent } from './job-notify';
+import { assertActionAllowed, stepBlockedReason } from './flow-gate';
 
 /**
  * Job challans and GDNs (workflow slice 4, spec §4.4, Pravin round 2).
@@ -32,8 +33,17 @@ export const JOB_CHALLAN_TYPE_LABEL: Record<JobChallanType, string> = {
 };
 
 export interface JobChallanView {
-  id: string; challanNo: string; complaintId: string; complaintNo: string; customerId: string; customerName: string;
+  id: string; challanNo: string;
+  /** Exactly one of these (22 Oct 2026, R3): a complaint's challan or an installation's. */
+  complaintId: string | null; installationChallanId: string | null;
+  /** The job's own number - the complaint no. or the installation challan no. */
+  complaintNo: string;
+  /** Where the job opens on the website. */
+  jobHref: string;
+  customerId: string; customerName: string;
   type: string; status: string; note: string | null; createdAt: Date; createdByName: string | null;
+  /** Who raised it - the phone lets only that person change it (22 Oct 2026). */
+  createdById: string | null;
   rejectionReason: string | null;
   lines: { id: string; productId: string; productName: string; productCode: string; qty: number; qtyIssued: number; qtyReturned: number; qtyReturnPending: number;
     /** Serial-number product, and the units of it still out on this job. */
@@ -47,7 +57,28 @@ const include = {
   lines: { include: { product: { select: { productName: true, productCode: true, trackingMode: true } } } },
   issues: { select: { gdnNo: true, cancelledAt: true }, orderBy: { issuedAt: 'asc' as const } },
   complaint: { select: { complaintNo: true, customerId: true, customer: { select: { companyName: true, firstName: true, lastName: true } } } },
+  installationChallan: { select: { challanNo: true, salesOrder: { select: { partyId: true, customerName: true, organizationName: true } } } },
 };
+
+/** Whose job a challan is on - the number, the customer and the page, for either kind. */
+export function jobOf(r: {
+  complaintId: string | null; installationChallanId: string | null;
+  complaint: { complaintNo: string; customerId: string; customer: { companyName: string | null; firstName: string | null; lastName: string | null } } | null;
+  installationChallan: { challanNo: string; salesOrder: { partyId: string | null; customerName: string; organizationName: string | null } | null } | null;
+}) {
+  if (r.complaint) {
+    const cu = r.complaint.customer;
+    return {
+      complaintNo: r.complaint.complaintNo, customerId: r.complaint.customerId, jobHref: `/services/complaints/${r.complaintId}`,
+      customerName: cu.companyName || [cu.firstName, cu.lastName].filter(Boolean).join(' '),
+    };
+  }
+  const so = r.installationChallan?.salesOrder;
+  return {
+    complaintNo: r.installationChallan?.challanNo ?? '-', customerId: so?.partyId ?? '', jobHref: `/services/installations/${r.installationChallanId}`,
+    customerName: so?.organizationName || so?.customerName || '',
+  };
+}
 
 async function toView(rows: Awaited<ReturnType<typeof findMany>>): Promise<JobChallanView[]> {
   const ids = [...new Set(rows.map((r) => r.createdBy).filter((x): x is string => !!x))];
@@ -56,10 +87,9 @@ async function toView(rows: Awaited<ReturnType<typeof findMany>>): Promise<JobCh
   const serialNo = new Map((unitIds.length ? await db.stockUnit.findMany({ where: { id: { in: unitIds }, storeId: { in: stores } }, select: { id: true, serialNo: true } }) : []).map((u) => [u.id, u.serialNo ?? u.id]));
   const names = new Map((ids.length ? await db.user.findMany({ where: { id: { in: ids } }, select: { id: true, fullName: true } }) : []).map((u) => [u.id, u.fullName]));
   return rows.map((r) => ({
-    id: r.id, challanNo: r.challanNo, complaintId: r.complaintId, complaintNo: r.complaint.complaintNo, customerId: r.complaint.customerId,
-    customerName: r.complaint.customer.companyName || [r.complaint.customer.firstName, r.complaint.customer.lastName].filter(Boolean).join(' '),
+    id: r.id, challanNo: r.challanNo, complaintId: r.complaintId, installationChallanId: r.installationChallanId, ...jobOf(r),
     type: r.type, status: r.status, note: r.note, createdAt: r.createdAt,
-    createdByName: r.createdBy ? names.get(r.createdBy) ?? null : null, rejectionReason: r.rejectionReason,
+    createdByName: r.createdBy ? names.get(r.createdBy) ?? null : null, createdById: r.createdBy, rejectionReason: r.rejectionReason,
     lines: r.lines.map((l) => ({ id: l.id, productId: l.productId, productName: l.product.productName, productCode: l.product.productCode, qty: l.qty, qtyIssued: l.qtyIssued, qtyReturned: l.qtyReturned, qtyReturnPending: l.qtyReturnPending,
       serial: l.product.trackingMode === 'serial', units: l.stockUnitIds.map((id) => ({ id, serialNo: serialNo.get(id) ?? id })) })),
     gdnNos: r.issues.filter((i) => !i.cancelledAt).map((i) => i.gdnNo),
@@ -74,6 +104,56 @@ export async function jobChallansFor(scope: StoreScope, complaintId: string): Pr
   // A hand-back GDN (stage 6) is not parts for the job - it shows with the items it handed back.
   return toView(await findMany({ complaintId, ...scopeWhere(scope), type: { not: 'handback' } }));
 }
+
+/** An installation's material challans (R3). */
+export async function installationJobChallans(scope: StoreScope, installationChallanId: string): Promise<JobChallanView[]> {
+  return toView(await findMany({ installationChallanId, ...scopeWhere(scope) }));
+}
+
+// ------------------------------------------------ whose job (22 Oct 2026, R3)
+
+/** The job a challan belongs to - a complaint or an installation, never both. */
+type JobRef = { storeId: string; complaintId: string | null; installationChallanId: string | null };
+
+/** What happened, on the job's own history. */
+async function say(tx: Tx | typeof db, j: JobRef, kind: 'challan_created' | 'challan_changed', userId: string | null, { body }: { body: string }) {
+  if (j.complaintId) return logActivity(tx, j.complaintId, kind, userId, { body });
+  if (j.installationChallanId) {
+    await tx.activityLog.create({
+      data: { storeId: j.storeId, userId, activityType: 'Material', entityType: 'installation_challan', entityId: j.installationChallanId, description: body },
+    });
+  }
+}
+
+/** Who hears about it - the complaint's people, or the installation's team and store. */
+async function tell(j: JobRef, event: JobEvent, detail: string) {
+  if (j.complaintId) return jobEvent(j.complaintId, event, detail);
+  if (j.installationChallanId) return installationEvent(j.installationChallanId, event, detail);
+}
+
+/** What the parts' cost is booked against: who the customer is and which account. */
+async function costTarget(scope: StoreScope, c: JobRef & { complaint: { id: string; customerId: string; productId: string | null } | null; installationChallan: { salesOrder: { partyId: string | null } | null } | null }) {
+  if (c.complaint) {
+    const cover = await resolveCoverageFor(scope, { customerId: c.complaint.customerId, productId: c.complaint.productId, onDate: new Date() });
+    return { job: c.complaint, partyId: c.complaint.customerId as string | null, account: repairCostAccount(cover.kind) };
+  }
+  // An installation's material is the cost of doing the job (D7) - billed only
+  // where the office marks it as an extra.
+  const partyId = c.installationChallan?.salesOrder?.partyId ?? null;
+  return { job: { id: c.installationChallanId ?? '', customerId: partyId ?? '', productId: null }, partyId, account: ACCOUNT.partsConsumed as string };
+}
+
+/** The job a cost posting names - the complaint, or the installation and its customer. */
+function costJob(c: { installationChallanId: string | null; complaint: { id: string; customerId: string; productId: string | null } | null; installationChallan: { salesOrder: { partyId: string | null } | null } | null }) {
+  return c.complaint ?? { id: c.installationChallanId ?? '', customerId: c.installationChallan?.salesOrder?.partyId ?? '', productId: null };
+}
+
+/** The job fields every challan action reads. */
+const jobSelect = {
+  storeId: true, complaintId: true, installationChallanId: true,
+  complaint: { select: { id: true, customerId: true, productId: true } },
+  installationChallan: { select: { salesOrder: { select: { partyId: true } } } },
+} as const;
 
 /**
  * The store's queue: approved and waiting to be issued (oldest first), still
@@ -118,24 +198,177 @@ export async function raiseJobChallan(
   }
   const type = (JOB_CHALLAN_TYPES as readonly string[]).includes(input.type) ? input.type : null;
   if (!type) throw new ComplaintError('Choose material, replacement or installation.');
-  const lines = input.lines.filter((l) => l.productId && Number.isFinite(l.qty) && l.qty > 0).map((l) => ({ productId: l.productId, qty: Math.trunc(l.qty) }));
-  if (!lines.length) throw new ComplaintError('Add at least one part with a quantity.');
-  if (lines.length > 50) throw new ComplaintError('That is more than 50 lines - split it into two challans.');
-  const found = await db.product.count({ where: { id: { in: lines.map((l) => l.productId) }, storeId } });
-  if (found !== new Set(lines.map((l) => l.productId)).size) throw new ComplaintError('A product is not in this branch.');
+  return createChallan(scope, { storeId, complaintId, installationChallanId: null }, type as JobChallanType, input, userId);
+}
 
-  const challanNo = await allocateDocumentNumber(storeId, 'JCH');
+/**
+ * Raise a material challan on an INSTALLATION (22 Oct 2026, R3): the cable,
+ * clamps and connectors that are not lines on the sales order, so never left
+ * on its GDN. The same engine as a complaint's - approval, store GDN, unused
+ * back. A technician on the installation's team while the work is under way;
+ * the office any time before it is approved.
+ */
+export async function raiseInstallationChallan(
+  scope: StoreScope, installationChallanId: string,
+  input: { type: string; lines: { productId: string; qty: number }[]; note?: string | null },
+  userId: string, actor: 'technician' | 'office',
+): Promise<{ id: string; challanNo: string }> {
+  const storeId = scopeForWrite(scope);
+  const job = await db.installationChallan.findFirst({
+    where: { id: installationChallanId, storeId },
+    select: { id: true, stage: true, status: true, assignees: { select: { userId: true } } },
+  });
+  if (!job) throw new ComplaintError('That installation is not in your branch.');
+  if (job.status === 'approved' || job.stage === 'approved') throw new ComplaintError('This installation is approved and finished - nothing more goes out on it.');
+  if (actor === 'technician') {
+    if (!job.assignees.some((a) => a.userId === userId)) throw new ComplaintError('You are not on this installation\'s team.');
+    if (!(INSTALL_WORK_STAGES as readonly string[]).includes(job.stage)) throw new ComplaintError('Start the work first (stage Survey or later) - material is asked for on site.');
+    await assertActionAllowed(storeId, 'raise_challan', 'technician');
+  }
+  // A replacement takes a customer's old unit out - that is a complaint's job, not a new fitting.
+  const type = input.type === 'installation' ? 'installation' : 'material';
+  return createChallan(scope, { storeId, complaintId: null, installationChallanId }, type, input, userId);
+}
+
+/** Installation stages in which the technician is working on the site. */
+export const INSTALL_WORK_STAGES = ['survey', 'material_ready', 'installing', 'testing'] as const;
+
+/** The lines checked, the challan numbered and logged, and sent for approval. */
+async function createChallan(
+  scope: StoreScope, j: JobRef, type: JobChallanType,
+  input: { lines: { productId: string; qty: number }[]; note?: string | null }, userId: string,
+): Promise<{ id: string; challanNo: string }> {
+  const lines = await cleanLines(j.storeId, input.lines);
+
+  const challanNo = await allocateDocumentNumber(j.storeId, 'JCH');
   const challan = await db.$transaction(async (tx) => {
     const c = await tx.jobChallan.create({
-      data: { storeId, challanNo, complaintId, type, note: input.note?.trim() || null, createdBy: userId, lines: { create: lines } },
+      data: { storeId: j.storeId, challanNo, complaintId: j.complaintId, installationChallanId: j.installationChallanId, type, note: input.note?.trim() || null, createdBy: userId, lines: { create: lines } },
     });
-    await logActivity(tx, complaintId, 'challan_created', userId, {
-      body: `${JOB_CHALLAN_TYPE_LABEL[type as JobChallanType]} challan ${challanNo} raised (${lines.length} line${lines.length === 1 ? '' : 's'}) - waiting for approval.`,
+    await say(tx, j, 'challan_created', userId, {
+      body: `${JOB_CHALLAN_TYPE_LABEL[type]} challan ${challanNo} raised (${lines.length} line${lines.length === 1 ? '' : 's'}) - waiting for approval.`,
     });
     return c;
   });
   await raiseApproval(scope, 'job_challan', challan.id, userId);
   return { id: challan.id, challanNo };
+}
+
+/** The lines as typed, checked: whole quantities above 0, at most 50, every product in this branch. */
+async function cleanLines(storeId: string, raw: { productId: string; qty: number }[]) {
+  const lines = raw.filter((l) => l.productId && Number.isFinite(l.qty) && l.qty > 0).map((l) => ({ productId: l.productId, qty: Math.trunc(l.qty) }));
+  if (!lines.length) throw new ComplaintError('Add at least one part with a quantity.');
+  if (lines.length > 50) throw new ComplaintError('That is more than 50 lines - split it into two challans.');
+  const found = await db.product.count({ where: { id: { in: lines.map((l) => l.productId) }, storeId } });
+  if (found !== new Set(lines.map((l) => l.productId)).size) throw new ComplaintError('A product is not in this branch.');
+  return lines;
+}
+
+// ------------------------------------------ change or withdraw (22 Oct 2026)
+
+/**
+ * A challan the store has not issued yet can still be put right (Vcare, 22
+ * Oct 2026): until then nothing has left the shelf, so changing it moves no
+ * stock and no cost.
+ *
+ *   edit      while it waits for approval, or after it was rejected - the
+ *             lines and note are replaced and it goes for approval again, so
+ *             the approver always approves what will really go out.
+ *   withdraw  while it waits, was rejected, or is approved but not issued -
+ *             it leaves the store's queue and is kept, crossed out, on the job.
+ *
+ * Who: the person who raised it from the phone (a technician edits only their
+ * own), or the office from the website (the same permission that raises one).
+ * Once issued, the store's own Correct / Cancel GDN are the way - unchanged.
+ */
+const EDITABLE = ['pending_approval', 'rejected'];
+const WITHDRAWABLE = ['pending_approval', 'rejected', 'approved'];
+
+/** `on`: the job the screen has open - the challan must be on it. */
+type OnJob = { complaintId?: string; installationChallanId?: string };
+
+async function loadForChange(scope: StoreScope, id: string, on: OnJob, userId: string, actor: 'technician' | 'office', allowed: string[], what: string) {
+  const c = await db.jobChallan.findFirst({
+    where: { id, ...scopeWhere(scope) },
+    select: {
+      id: true, challanNo: true, status: true, type: true, note: true, createdBy: true, ...jobSelect,
+      lines: { select: { qty: true, product: { select: { productName: true } } } },
+      issues: { where: { cancelledAt: null }, select: { id: true }, take: 1 },
+      complaint: { select: { id: true, status: true, customerId: true, productId: true } },
+      installationChallan: { select: { status: true, stage: true, salesOrder: { select: { partyId: true } } } },
+    },
+  });
+  if (!c) throw new ComplaintError('Challan not found in your scope.');
+  if ((on.complaintId && c.complaintId !== on.complaintId) || (on.installationChallanId && c.installationChallanId !== on.installationChallanId)) {
+    throw new ComplaintError('That challan is not on this job.');
+  }
+  if (c.type === 'handback') throw new ComplaintError('A hand-back GDN records what the customer took - it is not changed here.');
+  if (c.issues.length || c.status === 'issued') throw new ComplaintError(`${c.challanNo} is already issued - the store corrects or cancels its GDN in Parts counter.`);
+  if (!allowed.includes(c.status)) throw new ComplaintError(`${c.challanNo} is ${c.status.replace('_', ' ')} - it can no longer be ${what}.`);
+  if (actor === 'technician' && c.createdBy !== userId) throw new ComplaintError('Only the person who raised this challan can change it from the phone - ask the office.');
+  if (c.complaint && ['closed', 'cancelled'].includes(c.complaint.status)) throw new ComplaintError('This job is finished - reopen it first.');
+  if (c.installationChallan && (c.installationChallan.status === 'approved' || c.installationChallan.stage === 'approved')) {
+    throw new ComplaintError('This installation is approved and finished - its challans stay as they are.');
+  }
+  return c;
+}
+
+/**
+ * Claim the challan inside the transaction: the change goes through only if
+ * its status is still what was read, so an approval pressed at the same
+ * moment wins or loses cleanly - never approves the old lines while they are
+ * being replaced. The request an approver is looking at is closed with the
+ * reason, so it leaves My Desk.
+ */
+async function claimForChange(tx: Tx, scope: StoreScope, c: { id: string; challanNo: string; status: string }, data: Prisma.JobChallanUpdateManyMutationInput, userId: string, why: string) {
+  const n = await tx.jobChallan.updateMany({ where: { id: c.id, status: c.status }, data });
+  if (n.count !== 1) throw new ComplaintError(`${c.challanNo} was changed by someone else just now - open it again.`);
+  await tx.approvalRequest.updateMany({
+    where: { ...scopeWhere(scope), entityType: 'job_challan', entityId: c.id, status: 'PENDING' },
+    data: { status: 'REJECTED', decidedBy: userId, decidedAt: new Date(), note: why },
+  });
+}
+
+const linesText = (lines: { qty: number; product: { productName: string } }[]) => lines.map((l) => `${l.product.productName} × ${l.qty}`).join(', ');
+
+/** Change the lines, note or type of a challan not yet approved, and send it for approval again. */
+export async function editJobChallan(
+  scope: StoreScope, id: string, on: OnJob,
+  input: { type?: string | null; lines: { productId: string; qty: number }[]; note?: string | null },
+  userId: string, actor: 'technician' | 'office',
+): Promise<{ challanNo: string }> {
+  const c = await loadForChange(scope, id, on, userId, actor, EDITABLE, 'changed');
+  const lines = await cleanLines(c.storeId, input.lines);
+  // Same choices as raising: an installation's challan is never a replacement.
+  const kinds: readonly string[] = c.installationChallanId ? ['material', 'installation'] : JOB_CHALLAN_TYPES;
+  const type = input.type && kinds.includes(input.type) ? input.type : c.type;
+  const note = input.note?.trim() || null;
+
+  await db.$transaction(async (tx) => {
+    await claimForChange(tx, scope, c, { type, note, status: 'pending_approval', rejectionReason: null, approvedBy: null, approvedAt: null }, userId,
+      'Withdrawn - the challan was changed and sent again.');
+    await tx.jobChallanLine.deleteMany({ where: { challanId: c.id } });
+    await tx.jobChallanLine.createMany({ data: lines.map((l) => ({ ...l, challanId: c.id })) });
+    const now = await tx.jobChallanLine.findMany({ where: { challanId: c.id }, select: { qty: true, product: { select: { productName: true } } } });
+    await say(tx, c, 'challan_changed', userId, {
+      body: `Challan ${c.challanNo} changed${c.status === 'rejected' ? ' after it was rejected' : ''}: ${linesText(c.lines)} → ${linesText(now)}${note && note !== c.note ? `. Note: ${note}` : ''} - waiting for approval again.`,
+    });
+  });
+  await raiseApproval(scope, 'job_challan', c.id, userId);
+  return { challanNo: c.challanNo };
+}
+
+/** Take back a challan nothing has been issued on - it leaves the approvers and the store. */
+export async function withdrawJobChallan(
+  scope: StoreScope, id: string, on: OnJob, reason: string | null, userId: string, actor: 'technician' | 'office',
+): Promise<{ challanNo: string }> {
+  const c = await loadForChange(scope, id, on, userId, actor, WITHDRAWABLE, 'withdrawn');
+  const why = reason?.trim() || null;
+  await db.$transaction(async (tx) => {
+    await claimForChange(tx, scope, c, { status: 'withdrawn', rejectionReason: why }, userId, `Withdrawn${why ? `: ${why}` : ''}`);
+    await say(tx, c, 'challan_changed', userId, { body: `Challan ${c.challanNo} withdrawn${why ? `: ${why}` : ''} - nothing was issued on it.` });
+  });
+  return { challanNo: c.challanNo };
 }
 
 /** Approve or reject - through the engine when a rule routes it, directly otherwise. */
@@ -164,10 +397,10 @@ export async function decideJobChallan(
       ? { status: 'approved', approvedBy: userId, approvedAt: new Date() }
       : { status: 'rejected', rejectionReason: note?.trim() || 'Rejected', approvedBy: userId, approvedAt: new Date() },
   });
-  await logActivity(db, c.complaintId, 'challan_changed', userId, {
+  await say(db, c, 'challan_changed', userId, {
     body: final === 'approved' ? `Challan ${c.challanNo} approved - the store can issue it.` : `Challan ${c.challanNo} rejected: ${note?.trim() || '-'}`,
   });
-  await jobEvent(c.complaintId, 'challan_decided', final === 'approved' ? `${c.challanNo} approved - collect from the store` : `${c.challanNo} rejected: ${note?.trim() || '-'}`);
+  await tell(c, 'challan_decided', final === 'approved' ? `${c.challanNo} approved - collect from the store` : `${c.challanNo} rejected: ${note?.trim() || '-'}`);
   if (final !== 'approved') return;
   // Settings > Field jobs > "Create the GDN automatically" (on by default,
   // Pravin 28 Sep 2026): the GDN is made now, unless stock is short - then it
@@ -178,23 +411,23 @@ export async function decideJobChallan(
     // Serial items wait for the store to pick which units go (live test 2).
     const serial = await db.jobChallanLine.count({ where: { challanId: c.id, product: { trackingMode: 'serial' } } });
     if (serial) {
-      await logActivity(db, c.complaintId, 'challan_changed', null, { body: `Challan ${c.challanNo} has serial-number items - the store picks the serials and issues it in Parts counter.` });
+      await say(db, c, 'challan_changed', null, { body: `Challan ${c.challanNo} has serial-number items - the store picks the serials and issues it in Parts counter.` });
     } else if (!short.length) {
       try {
         const { gdnNo } = await issueJobChallan(scope, c.id, userId);
-        await logActivity(db, c.complaintId, 'challan_changed', userId, { body: `${gdnNo} created automatically on approval.` });
-        await jobEvent(c.complaintId, 'gdn_auto', gdnNo);
+        await say(db, c, 'challan_changed', userId, { body: `${gdnNo} created automatically on approval.` });
+        await tell(c, 'gdn_auto', gdnNo);
         return;
       } catch (e) {
         console.error('[job challan] automatic GDN failed - left for the store', e);
       }
     } else {
-      await logActivity(db, c.complaintId, 'challan_changed', null, {
+      await say(db, c, 'challan_changed', null, {
         body: `Not enough stock for ${short.join(', ')} - challan ${c.challanNo} waits in Parts counter.`,
       });
     }
   }
-  await jobEvent(c.complaintId, 'challan_to_issue', c.challanNo);
+  await tell(c, 'challan_to_issue', c.challanNo);
 }
 
 /** Products on a challan the branch does not have enough of (all warehouses). */
@@ -230,7 +463,7 @@ export async function correctJobIssue(
   if (!why) throw new ComplaintError('Say what was wrong - it is kept on the job.');
   const c = await db.jobChallan.findFirst({
     where: { id: challanId, ...scopeWhere(scope) },
-    select: { id: true, status: true, type: true, challanNo: true, complaintId: true, complaint: { select: { id: true, customerId: true, productId: true } }, issues: { where: { cancelledAt: null }, select: { gdnNo: true }, take: 1 } },
+    select: { id: true, status: true, type: true, challanNo: true, ...jobSelect, issues: { where: { cancelledAt: null }, select: { gdnNo: true }, take: 1 } },
   });
   if (!c) throw new ComplaintError('Challan not found in your scope.');
   if (c.status !== 'issued') throw new ComplaintError('Only an issued challan can be corrected.');
@@ -254,17 +487,17 @@ export async function correctJobIssue(
       await putBack(tx, storeId, userId, ch.line, ch.back, ch.unitIds, `GDN corrected: ${why}`, gdnNo, whs[i]);
       await tx.jobChallanLine.update({ where: { id: ch.line.id }, data: { qtyIssued: { decrement: ch.back } } });
     }
-    await logActivity(tx, c.complaintId, 'challan_changed', userId, {
+    await say(tx, c, 'challan_changed', userId, {
       body: `${gdnNo} corrected by the store: ${changes.map((ch) => `${ch.line.product.productName} ${ch.line.qtyIssued} → ${ch.line.qtyIssued - ch.back}`).join(', ')}. Reason: ${why}`,
     });
   });
   for (const ch of changes) {
-    await postPartsCost(scope, c.complaint, [await lineCost(scope, ch.line, ch.back)], {
+    await postPartsCost(scope, costJob(c), [await lineCost(scope, ch.line, ch.back)], {
       sourceType: 'job_material_return', sourceId: ch.line.id, description: `${gdnNo} corrected (${why})`, sign: -1, account: ch.line.costAccount ?? undefined,
     }, userId).catch((e) => console.error('[job challan] correction cost failed', e));
   }
-  await syncEstimateToUsed(c.complaintId, userId).catch((e) => console.error('[job challan] estimate sync failed', e));
-  await jobEvent(c.complaintId, 'gdn_changed', `${gdnNo} corrected: ${why}`);
+  await syncEstimateFor(c, userId).catch((e) => console.error('[job challan] estimate sync failed', e));
+  await tell(c, 'gdn_changed', `${gdnNo} corrected: ${why}`);
 }
 
 /**
@@ -282,6 +515,7 @@ export async function cancelJobIssue(scope: StoreScope, challanId: string, reaso
       lines: { select: { id: true, qtyIssued: true, qtyReturned: true, qtyReturnPending: true, oldUnits: { select: { id: true, receivedAt: true } } } },
       issues: { where: { cancelledAt: null }, select: { id: true, gdnNo: true } },
       complaint: { select: { id: true, customerId: true, productId: true } },
+      installationChallan: { select: { salesOrder: { select: { partyId: true } } } },
     },
   });
   if (!c) throw new ComplaintError('Challan not found in your scope.');
@@ -303,15 +537,15 @@ export async function cancelJobIssue(scope: StoreScope, challanId: string, reaso
     await tx.faultyPartReturn.deleteMany({ where: { challanLineId: { in: c.lines.map((l) => l.id) }, receivedAt: null } });
     await tx.materialIssue.update({ where: { id: issue.id }, data: { cancelledAt: new Date(), cancelledBy: userId, cancelReason: why } });
     await tx.jobChallan.update({ where: { id: c.id }, data: { status: 'approved' } });
-    await logActivity(tx, c.complaintId, 'challan_changed', userId, { body: `${issue.gdnNo} cancelled by the store - parts back in stock. Reason: ${why}. Challan ${c.challanNo} is back in Parts counter.` });
+    await say(tx, c, 'challan_changed', userId, { body: `${issue.gdnNo} cancelled by the store - parts back in stock. Reason: ${why}. Challan ${c.challanNo} is back in Parts counter.` });
   });
   for (const l of back) {
-    await postPartsCost(scope, c.complaint, [await lineCost(scope, l, l.qtyIssued)], {
+    await postPartsCost(scope, costJob(c), [await lineCost(scope, l, l.qtyIssued)], {
       sourceType: 'job_material_return', sourceId: issue.id, description: `${issue.gdnNo} cancelled (${why})`, sign: -1, account: l.costAccount ?? undefined,
     }, userId).catch((e) => console.error('[job challan] cancel cost failed', e));
   }
-  await syncEstimateToUsed(c.complaintId, userId).catch((e) => console.error('[job challan] estimate sync failed', e));
-  await jobEvent(c.complaintId, 'gdn_changed', `${issue.gdnNo} cancelled: ${why}`);
+  await syncEstimateFor(c, userId).catch((e) => console.error('[job challan] estimate sync failed', e));
+  await tell(c, 'gdn_changed', `${issue.gdnNo} cancelled: ${why}`);
 }
 
 /**
@@ -327,7 +561,7 @@ export async function issueJobChallan(
   const storeId = scopeForWrite(scope);
   const c = await db.jobChallan.findFirst({
     where: { id, ...scopeWhere(scope) },
-    include: { lines: { include: { product: { select: { productName: true, trackingMode: true } } } }, complaint: { select: { id: true, customerId: true, productId: true } } },
+    include: { lines: { include: { product: { select: { productName: true, trackingMode: true } } } }, complaint: { select: { id: true, customerId: true, productId: true } }, installationChallan: { select: { salesOrder: { select: { partyId: true } } } } },
   });
   if (!c) throw new ComplaintError('Challan not found in your scope.');
   if (c.status !== 'approved') throw new ComplaintError(c.status === 'issued' ? 'That challan is already issued.' : 'Only an approved challan can be issued.');
@@ -347,8 +581,7 @@ export async function issueJobChallan(
   for (const l of c.lines) if (!units.has(l.id)) homes.set(l.id, await stockHome(l.productId));
   // The cost and account are fixed now, so returns reverse exactly this.
   const costs = await costsFor(scope, [...new Set(c.lines.map((l) => l.productId))]);
-  const cover = await resolveCoverageFor(scope, { customerId: c.complaint.customerId, productId: c.complaint.productId, onDate: new Date() });
-  const account = repairCostAccount(cover.kind);
+  const { account, partyId } = await costTarget(scope, c);
 
   const gdnNo = await allocateDocumentNumber(storeId, 'GDN');
   const issue = await db.$transaction(async (tx) => {
@@ -359,20 +592,24 @@ export async function issueJobChallan(
       // `applyMovements` takes the oldest units and records what it could not
       // name. Without `partyId` it would bind nothing, because a unit that says
       // `with_customer` and names nobody is the hole this work closes.
-      : [{ productId: l.productId, qty: -l.qty, reason: 'job_issue' as const, refType: 'MaterialIssue', refId: mi.id, refNo: gdnNo, warehouseId: homes.get(l.id) ?? null, partyId: c.complaint.customerId }]));
-    for (const ids of units.values()) await setUnits(tx, storeId, ids, 'in_stock', 'with_customer', c.complaint.customerId, { refType: 'MaterialIssue', refId: mi.id, refNo: gdnNo }, userId);
+      : [{ productId: l.productId, qty: -l.qty, reason: 'job_issue' as const, refType: 'MaterialIssue', refId: mi.id, refNo: gdnNo, warehouseId: homes.get(l.id) ?? null, partyId }]));
+    for (const ids of units.values()) await setUnits(tx, storeId, ids, 'in_stock', 'with_customer', partyId, { refType: 'MaterialIssue', refId: mi.id, refNo: gdnNo }, userId);
     for (const l of c.lines) {
       await tx.jobChallanLine.update({
         where: { id: l.id },
         data: { qtyIssued: l.qty, stockUnitIds: units.get(l.id) ?? [], unitCostPaise: costs.get(l.productId)?.unitCostPaise ?? 0, costAccount: account },
       });
     }
-    await tx.jobChallan.update({ where: { id: c.id }, data: { status: 'issued' } });
-    await logActivity(tx, c.complaintId, 'challan_changed', userId, { body: `Parts on challan ${c.challanNo} issued on ${gdnNo}.` });
+    // Only if it is still approved: a challan withdrawn a moment ago is not
+    // issued after all - the whole issue rolls back (22 Oct 2026).
+    const still = await tx.jobChallan.updateMany({ where: { id: c.id, status: 'approved' }, data: { status: 'issued' } });
+    if (still.count !== 1) throw new ComplaintError(`${c.challanNo} was withdrawn or changed just now - open it again.`);
+    await say(tx, c, 'challan_changed', userId, { body: `Parts on challan ${c.challanNo} issued on ${gdnNo}.` });
     // A replacement takes the customer's old unit out: it must come back to
     // the store (Pravin, 28 Sep 2026) - never into sellable stock; receiving it
     // opens a Replacements case (supplier / service centre / scrap).
-    if (c.type === 'replacement') {
+    // (An installation's challan is never a replacement - raiseInstallationChallan.)
+    if (c.type === 'replacement' && c.complaintId) {
       for (const l of c.lines) {
         await tx.faultyPartReturn.create({
           data: {
@@ -384,11 +621,11 @@ export async function issueJobChallan(
     }
     return mi;
   });
-  await postPartsCost(scope, c.complaint, c.lines.map((l) => ({ productId: l.productId, qty: l.qty, unitCostPaise: costs.get(l.productId)?.unitCostPaise ?? 0 })), {
+  await postPartsCost(scope, costJob(c), c.lines.map((l) => ({ productId: l.productId, qty: l.qty, unitCostPaise: costs.get(l.productId)?.unitCostPaise ?? 0 })), {
     sourceType: 'job_material_issue', sourceId: issue.id, description: `Parts issued on ${gdnNo} (challan ${c.challanNo})`, sign: 1, account,
   }, userId).catch((e) => console.error('[job challan] cost posting failed', e));
-  await jobEvent(c.complaintId, 'challan_issued', gdnNo);
-  if (c.type === 'replacement') await jobEvent(c.complaintId, 'old_unit_due', `replaced on ${gdnNo}`);
+  await tell(c, 'challan_issued', gdnNo);
+  if (c.type === 'replacement') await tell(c, 'old_unit_due', `replaced on ${gdnNo}`);
   return { gdnNo };
 }
 
@@ -397,7 +634,7 @@ async function loadLine(scope: StoreScope, lineId: string) {
     where: { id: lineId, challan: scopeWhere(scope) },
     include: {
       product: { select: { productName: true, trackingMode: true } },
-      challan: { select: { id: true, challanNo: true, complaintId: true, complaint: { select: { id: true, customerId: true, productId: true } }, issues: { where: { cancelledAt: null }, select: { id: true, gdnNo: true }, take: 1 } } },
+      challan: { select: { id: true, challanNo: true, ...jobSelect, issues: { where: { cancelledAt: null }, select: { id: true, gdnNo: true }, take: 1 } } },
     },
   });
   if (!line) throw new ComplaintError('That challan line is not in your scope.');
@@ -474,17 +711,24 @@ const stillOut = (l: Line) => l.qtyIssued - l.qtyReturned - l.qtyReturnPending;
  * request only; stock moves when the store receives them. Before 28 Sep 2026
  * the phone put stock back on the technician's word alone.
  */
-export async function requestPartsReturn(scope: StoreScope, lineId: string, qty: number, userId: string): Promise<void> {
+export async function requestPartsReturn(
+  scope: StoreScope, lineId: string, qty: number, userId: string,
+  /** The job the phone opened - the line must be on it (22 Oct 2026: any line in the branch was accepted). */
+  onJob?: { complaintId?: string; installationChallanId?: string },
+): Promise<void> {
   scopeForWrite(scope);
   const n = Math.trunc(qty);
   const line = await loadLine(scope, lineId);
+  if (onJob && !(onJob.complaintId ? line.challan.complaintId === onJob.complaintId : line.challan.installationChallanId === onJob.installationChallanId)) {
+    throw new ComplaintError('That part is not on this job.');
+  }
   if (!(n > 0)) throw new ComplaintError('Enter how many are coming back.');
   if (n > stillOut(line)) throw new ComplaintError(`Only ${stillOut(line)} of these were issued and not yet returned.`);
   await db.jobChallanLine.update({ where: { id: line.id }, data: { qtyReturnPending: { increment: n } } });
-  await logActivity(db, line.challan.complaintId, 'challan_changed', userId, {
+  await say(db, line.challan, 'challan_changed', userId, {
     body: `${n} unused part(s) to hand back to the store (${line.challan.challanNo}) - waiting for the store to receive them.`,
   });
-  await jobEvent(line.challan.complaintId, 'parts_returning', `${n} × ${line.product.productName}`);
+  await tell(line.challan, 'parts_returning', `${n} × ${line.product.productName}`);
 }
 
 /** The store receives the parts that were said to be coming back. Returns how many. */
@@ -515,13 +759,13 @@ async function moveBack(scope: StoreScope, line: Line, n: number, userId: string
       where: { id: line.id },
       data: { qtyReturned: { increment: n }, ...(fromPending ? { qtyReturnPending: { decrement: n } } : {}) },
     });
-    await logActivity(tx, line.challan.complaintId, 'challan_changed', userId, { body: `${n} unused part(s) received back into stock by the store (${gdnNo}).` });
+    await say(tx, line.challan, 'challan_changed', userId, { body: `${n} unused part(s) received back into stock by the store (${gdnNo}).` });
   });
-  await postPartsCost(scope, line.challan.complaint, [await lineCost(scope, line, n)], {
+  await postPartsCost(scope, costJob(line.challan), [await lineCost(scope, line, n)], {
     sourceType: 'job_material_return', sourceId: line.id, description: `Unused parts returned (${gdnNo})`, sign: -1, account: line.costAccount ?? undefined,
   }, userId).catch((e) => console.error('[job challan] return cost failed', e));
   // A waiting estimate follows what was really used (live test 2).
-  await syncEstimateToUsed(line.challan.complaintId, userId).catch((e) => console.error('[job challan] estimate sync failed', e));
+  await syncEstimateFor(line.challan, userId).catch((e) => console.error('[job challan] estimate sync failed', e));
 }
 
 /** The store's list: unused parts said to be coming back. */
@@ -530,7 +774,13 @@ export async function returnsToReceive(scope: StoreScope) {
     where: { qtyReturnPending: { gt: 0 }, challan: scopeWhere(scope) },
     include: {
       product: { select: { productName: true, productCode: true, trackingMode: true } },
-      challan: { select: { challanNo: true, complaintId: true, complaint: { select: { complaintNo: true } }, issues: { where: { cancelledAt: null }, select: { gdnNo: true }, take: 1 } } },
+      challan: {
+        select: {
+          challanNo: true, complaintId: true, installationChallanId: true,
+          complaint: { select: { complaintNo: true } }, installationChallan: { select: { challanNo: true } },
+          issues: { where: { cancelledAt: null }, select: { gdnNo: true }, take: 1 },
+        },
+      },
     },
     take: FEED_MAX_ROWS,
   });
@@ -539,7 +789,10 @@ export async function returnsToReceive(scope: StoreScope) {
   return rows.map((l) => ({
     lineId: l.id, qty: l.qtyReturnPending, productName: l.product.productName, productCode: l.product.productCode,
     serial: l.product.trackingMode === 'serial', units: l.stockUnitIds.map((id) => ({ id, serialNo: serialNo.get(id) ?? id })),
-    challanNo: l.challan.challanNo, gdnNo: l.challan.issues[0]?.gdnNo ?? null, complaintId: l.challan.complaintId, complaintNo: l.challan.complaint.complaintNo,
+    challanNo: l.challan.challanNo, gdnNo: l.challan.issues[0]?.gdnNo ?? null, complaintId: l.challan.complaintId,
+    // The job's number and page - a complaint's or an installation's (R3).
+    complaintNo: l.challan.complaint?.complaintNo ?? l.challan.installationChallan?.challanNo ?? '-',
+    jobHref: l.challan.complaintId ? `/services/complaints/${l.challan.complaintId}` : `/services/installations/${l.challan.installationChallanId}`,
   }));
 }
 
@@ -631,14 +884,67 @@ export async function faultyPartsFor(scope: StoreScope, where: { complaintId?: s
   });
 }
 
-/** A waiting estimate follows what was really used (lazy import: job-customer is a sibling). */
-const syncEstimateToUsed = async (complaintId: string, userId: string | null) => (await import('./job-billing')).syncEstimateToUsed(complaintId, userId);
+/**
+ * The job's parts as the phone shows them: challans (status, GDN) and faulty
+ * parts - never sent to customers. One shape for the complaint screen and
+ * the visit screen (22 Oct 2026, Vcare: a technician on a visit could not
+ * send unused parts back without opening the complaint).
+ */
+export async function phoneJobParts(scope: StoreScope, complaintId: string, storeId: string, me?: string) {
+  const [challans, faulty, blocked] = await Promise.all([
+    jobChallansFor(scope, complaintId),
+    faultyPartsFor(scope, { complaintId }),
+    stepBlockedReason(storeId, 'job.challan', 'technician'),
+  ]);
+  return {
+    challans: challans.map((c) => phoneChallan(c, me)),
+    faulty: faulty.map((f) => ({ id: f.id, description: f.description, serialNo: f.serialNo, receivedAt: f.receivedAt })),
+    /**
+     * Whether THIS business still lets a technician raise the challan
+     * (F1a). The server refuses it either way; this is so the phone can
+     * hide the button instead of offering something that will be rejected.
+     * Older builds ignore the field and get the refusal with its reason.
+     */
+    canRaiseChallan: blocked === null,
+  };
+}
+
+/**
+ * One challan as the phone shows it. `mine` (22 Oct 2026): this person raised
+ * it, so the phone offers Change / Withdraw while the server would allow them -
+ * older builds ignore it.
+ */
+function phoneChallan(c: JobChallanView, me?: string) {
+  return {
+    id: c.id, challanNo: c.challanNo, type: c.type, status: c.status, rejectionReason: c.rejectionReason, gdnNos: c.gdnNos, lines: c.lines,
+    note: c.note, mine: !!me && c.createdById === me,
+  };
+}
+
+/** An installation's material challans as the phone shows them (R3) - the same card as a complaint's, no faulty parts. */
+export async function phoneInstallationParts(scope: StoreScope, installationChallanId: string, storeId: string, me?: string) {
+  const [challans, blocked] = await Promise.all([
+    installationJobChallans(scope, installationChallanId),
+    stepBlockedReason(storeId, 'job.challan', 'technician'),
+  ]);
+  return {
+    challans: challans.map((c) => phoneChallan(c, me)),
+    faulty: [] as { id: string; description: string; serialNo: string | null; receivedAt: Date | null }[],
+    canRaiseChallan: blocked === null,
+  };
+}
+
+/** A waiting estimate follows what was really used (lazy import: job-customer is a sibling). A complaint's only - an installation has no estimate. */
+const syncEstimateFor = async (j: { complaintId: string | null }, userId: string | null) => {
+  if (j.complaintId) await (await import('./job-billing')).syncEstimateToUsed(j.complaintId, userId);
+};
 
 // ------------------------------------------------ GDN register (28 Sep 2026)
 
 export interface JobGdnRow {
   id: string; gdnNo: string; issuedAt: Date; cancelledAt: Date | null; cancelReason: string | null;
-  complaintId: string; complaintNo: string; customerId: string; customerName: string; challanNo: string; type: string; issuedByName: string | null;
+  complaintId: string | null; installationChallanId: string | null; complaintNo: string; jobHref: string;
+  customerId: string; customerName: string; challanNo: string; type: string; issuedByName: string | null;
   lines: { productName: string; issued: number; returned: number; pending: number; used: number }[];
 }
 
@@ -654,8 +960,9 @@ export async function jobGdnList(scope: StoreScope): Promise<JobGdnRow[]> {
       id: true, gdnNo: true, issuedAt: true, cancelledAt: true, cancelReason: true, issuedBy: true,
       challan: {
         select: {
-          challanNo: true, type: true, complaintId: true,
+          challanNo: true, type: true, complaintId: true, installationChallanId: true,
           complaint: { select: { complaintNo: true, customerId: true, customer: { select: { companyName: true, firstName: true, lastName: true } } } },
+          installationChallan: { select: { challanNo: true, salesOrder: { select: { partyId: true, customerName: true, organizationName: true } } } },
           lines: { select: { qty: true, qtyIssued: true, qtyReturned: true, qtyReturnPending: true, product: { select: { productName: true } } } },
         },
       },
@@ -664,11 +971,9 @@ export async function jobGdnList(scope: StoreScope): Promise<JobGdnRow[]> {
   const ids = [...new Set(rows.map((r) => r.issuedBy).filter((x): x is string => !!x))];
   const names = new Map((ids.length ? await db.user.findMany({ where: { id: { in: ids } }, select: { id: true, fullName: true } }) : []).map((u) => [u.id, u.fullName]));
   return rows.map((r) => {
-    const cu = r.challan.complaint.customer;
     return {
       id: r.id, gdnNo: r.gdnNo, issuedAt: r.issuedAt, cancelledAt: r.cancelledAt, cancelReason: r.cancelReason,
-      complaintId: r.challan.complaintId, complaintNo: r.challan.complaint.complaintNo, customerId: r.challan.complaint.customerId,
-      customerName: cu.companyName || [cu.firstName, cu.lastName].filter(Boolean).join(' '),
+      complaintId: r.challan.complaintId, installationChallanId: r.challan.installationChallanId, ...jobOf(r.challan),
       challanNo: r.challan.challanNo, type: r.challan.type, issuedByName: r.issuedBy ? names.get(r.issuedBy) ?? null : null,
       lines: r.challan.lines.map((l) => {
         // A cancelled GDN's lines were reset to 0 issued; show what it carried.
@@ -718,7 +1023,9 @@ export async function jobGdnDocument(scope: StoreScope, id: string) {
 
       challan: {
         select: {
-          id: true, challanNo: true, type: true, complaintId: true,
+          id: true, challanNo: true, type: true, complaintId: true, installationChallanId: true,
+          // An installation's material GDN (R3): the order's buyer and where the goods went.
+          installationChallan: { select: { challanNo: true, siteLocation: true, salesOrder: { select: { customerName: true, organizationName: true, phone: true, shippingAddress: true, billingAddress: true } } } },
           complaint: {
             select: {
               complaintNo: true, description: true,
@@ -745,7 +1052,9 @@ export async function jobGdnDocument(scope: StoreScope, id: string) {
   if (!g) return null;
 
   const c = g.challan.complaint;
-  const cu = c.customer;
+  const cu = c?.customer ?? null;
+  const ic = g.challan.installationChallan;
+  const so = ic?.salesOrder ?? null;
   const issuer = g.issuedBy
     ? await db.user.findUnique({ where: { id: g.issuedBy }, select: { fullName: true } })
     : null;
@@ -765,23 +1074,23 @@ export async function jobGdnDocument(scope: StoreScope, id: string) {
     cancelReason: g.cancelReason,
     issuedByName: issuer?.fullName ?? null,
     complaintId: g.challan.complaintId,
-    complaintNo: c.complaintNo,
-    complaintNote: c.description,
+    installationChallanId: g.challan.installationChallanId,
+    complaintNo: c?.complaintNo ?? ic?.challanNo ?? '-',
+    complaintNote: c?.description ?? null,
     challanId: g.challan.id,
     challanNo: g.challan.challanNo,
     challanType: g.challan.type,
-    customerName: [cu.title, cu.firstName, cu.lastName].filter(Boolean).join(' ').trim(),
-    organizationName: cu.companyName,
-    phone: [cu.phoneCc, cu.phone].filter(Boolean).join(' '),
+    customerName: cu ? [cu.title, cu.firstName, cu.lastName].filter(Boolean).join(' ').trim() : so?.customerName ?? '',
+    organizationName: cu ? cu.companyName : so?.organizationName ?? null,
+    phone: cu ? [cu.phoneCc, cu.phone].filter(Boolean).join(' ') : so?.phone ?? '',
     // The site the parts went to, which is not necessarily the billing address -
     // that distinction is the whole reason a field job has a site at all.
     // The site the parts went to, which is NOT necessarily the billing address.
     // That distinction is the whole reason a field job carries a site at all.
-    siteAddress: c.site?.address
-      ?? c.siteLocation
-      ?? [cu.addressLine1, cu.city, cu.state].filter(Boolean).join(', ')
-      ?? null,
-    siteLabel: c.site?.name ?? null,
+    siteAddress: c
+      ? c.site?.address ?? c.siteLocation ?? [cu?.addressLine1, cu?.city, cu?.state].filter(Boolean).join(', ')
+      : ic?.siteLocation ?? so?.shippingAddress ?? so?.billingAddress ?? null,
+    siteLabel: c?.site?.name ?? null,
     storeName: store?.name ?? '',
     storeAddress: store?.address ?? null,
     org: {

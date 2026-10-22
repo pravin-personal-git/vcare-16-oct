@@ -5,6 +5,7 @@ import { mobileContext } from './mobile-context';
 import { db } from '../db';
 import type { AppContext } from '../context';
 import { StoreScopeError } from '../store-scope';
+import { InstallationReturnError } from '../installation-returns';
 import { ComplaintError } from '../complaints';
 import { GrnError } from '../goods-receipt';
 import { FlowGateError } from '../flow-gate';
@@ -30,7 +31,7 @@ export class V1Error extends Error {
 // client switched off came back as a blank 500.
 // InstallationChallanError added 11 Oct 2026 (G2): the phone's stage / item
 // actions say why they refused (e.g. "say why it is going back a step").
-const FRIENDLY = [V1Error, StoreScopeError, ComplaintError, GrnError, FlowGateError, InstallationChallanError];
+const FRIENDLY = [V1Error, StoreScopeError, ComplaintError, GrnError, FlowGateError, InstallationChallanError, InstallationReturnError];
 
 export function friendlyScopeMessage(e: StoreScopeError): string {
   return e.message.includes('All Company')

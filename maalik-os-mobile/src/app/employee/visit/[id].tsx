@@ -7,8 +7,12 @@ import { useTheme } from '@/theme/ThemeProvider';
 import { Banner, Button, Card, Field, Text } from '@/components/ui';
 import { Empty, Loading, Pill, SectionLabel, SubScreen, fmtDateTime, useLoad } from '@/components/Kit';
 import { Icon } from '@/components/Icon';
-import { moveVisit, visit, type VisitCall } from '@/lib/jobs';
-import { dialable, useAccess } from '@/lib/access';
+import { complaintAction, installationPartsAction, moveVisit, visit, type VisitCall } from '@/lib/jobs';
+import { JobPartsCard } from '@/components/JobPartsCard';
+import { ApiError } from '@/lib/api';
+import { can, dialable, useAccess } from '@/lib/access';
+import { enqueueJobStep, flushJobQueue, QUEUEABLE } from '@/lib/jobQueue';
+import { isNoSignal } from '@/lib/net';
 import { space } from '@/theme/tokens';
 
 /**
@@ -24,14 +28,21 @@ import { space } from '@/theme/tokens';
  * those are the two questions a manager asks about a moved appointment.
  * `VisitChange` has stored both since it was written; the phone could never
  * write one.
+ *
+ * A complaint's visit also shows that complaint's Parts card (22 Oct 2026,
+ * Vcare): send unused parts back, raise a challan, log a faulty part - the
+ * complaint's own actions, so the same checks and the same store queue.
  */
 export default function Visit() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const { t } = useT();
   const { c } = useTheme();
   const access = useAccess();
-  const load = useCallback(() => visit(String(id)), [id]);
+  // Send parts steps saved offline first, so the card shows where they really are.
+  const load = useCallback(async () => { await flushJobQueue(); return visit(String(id)); }, [id]);
   const { data, error, loading, reload } = useLoad(load);
+  const [partsBusy, setPartsBusy] = useState<string | null>(null);
+  const [partsMsg, setPartsMsg] = useState<{ tone: 'success' | 'danger' | 'warning'; text: string } | null>(null);
 
   const [moving, setMoving] = useState(false);
   const [when, setWhen] = useState('');
@@ -43,6 +54,37 @@ export default function Visit() {
 
   const v = data?.visit;
   const canEdit = data?.canEdit ?? false;
+  const complaintId = v?.complaintId ?? null;
+  const installId = v?.installationChallanId ?? null;
+
+  /** A Parts card step, sent as the job's own - a complaint's, or an installation's (which queues offline itself). */
+  const partsAct = async (key: string, body: Record<string, unknown>, done?: string) => {
+    if (!complaintId && !installId) return null;
+    setPartsBusy(key); setPartsMsg(null);
+    try {
+      if (!complaintId && installId) {
+        const r = await installationPartsAction(installId, body);
+        setPartsMsg(isQueued(r) ? { tone: 'warning', text: t(r.message) } : done ? { tone: 'success', text: t(done) } : null);
+        void reload();
+        return r;
+      }
+      const r = await complaintAction(complaintId!, body);
+      if (done) setPartsMsg({ tone: 'success', text: t(done) });
+      void reload();
+      return r;
+    } catch (e) {
+      // No signal: kept on the phone and sent later, under the complaint (workflow slice 8).
+      if (complaintId && isNoSignal(e) && QUEUEABLE.has(String(body.op ?? ''))) {
+        await enqueueJobStep(complaintId, body, key);
+        setPartsMsg({ tone: 'warning', text: t('No signal - saved on the phone. It will be sent automatically when you are back online.') });
+        return null;
+      }
+      setPartsMsg({ tone: 'danger', text: e instanceof ApiError ? t(e.message) : t('Could not reach the server. Check the connection and try again.') });
+      return null;
+    } finally {
+      setPartsBusy(null);
+    }
+  };
 
   const submit = async () => {
     setProblem(null);
@@ -129,7 +171,10 @@ export default function Visit() {
           )}
           <Pressable
             accessibilityRole="button"
-            onPress={() => router.push({ pathname: '/employee/complaint/[id]', params: { id: v.complaintId } })}
+            // An installation's visit has no complaint - open its installation instead.
+            onPress={() => (v.complaintId
+              ? router.push({ pathname: '/employee/complaint/[id]', params: { id: v.complaintId } })
+              : v.installationChallanId && router.push({ pathname: '/employee/installation/[id]', params: { id: v.installationChallanId } }))}
             style={{ flexDirection: 'row', alignItems: 'center', gap: space.xs }}
           >
             <Icon name="wrench" size={16} color={c.brand} />
@@ -140,6 +185,12 @@ export default function Visit() {
           <Text variant="small" color={c.inkSoft} style={{ marginTop: space.sm }}>{v.description}</Text>
         ) : null}
       </Card>
+
+      {/* ---- the complaint's parts --------------------------------------- */}
+      {partsMsg && <Banner tone={partsMsg.tone}>{partsMsg.text}</Banner>}
+      {data?.parts && canEdit && can(access, 'complaints.jobSteps') && (
+        <JobPartsCard parts={data.parts} onSite={data.partsOnSite ?? data.complaintStatus === 'on_site'} busy={partsBusy} send={partsAct} faultyParts={!!complaintId} />
+      )}
 
       {/* ---- the calls -------------------------------------------------- */}
       <SectionLabel>{t('Your calls to this site')}</SectionLabel>

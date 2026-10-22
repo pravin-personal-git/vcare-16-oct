@@ -1,5 +1,4 @@
 import { field, jsonBody, requireAction, str, V1Error } from '@/server/auth/v1-staff';
-import { stepBlockedReason } from '@/server/flow-gate';
 import { db } from '@/server/db';
 import { teamIds } from '@/server/team-reach';
 import { callsWithParty } from '@/server/call-logs';
@@ -14,7 +13,7 @@ import {
 import { getJobSettings } from '@/server/job-settings';
 import { customerApprovedFallback, resendOtp, verifyOtp } from '@/server/job-signoff';
 import { tapTime } from '@/lib/job-flow';
-import { faultyPartsFor, jobChallansFor, logFaultyPart, raiseJobChallan, requestPartsReturn } from '@/server/job-challans';
+import { editJobChallan, logFaultyPart, phoneJobParts, raiseJobChallan, requestPartsReturn, withdrawJobChallan } from '@/server/job-challans';
 import { complaintItems, pickUpItems } from '@/server/complaint-items';
 
 /** A GPS reading from the phone, or null when it sent none. */
@@ -41,6 +40,7 @@ const PHONE_STATUSES = ['in_progress', 'resolved'];
 const JOB_STEP_OPS = new Set([
   'accept', 'decline', 'on_the_way', 'on_site', 'request_override', 'leave_site', 'work_done', 'book_visit', 'change_visit',
   'enter_otp', 'resend_otp', 'customer_approved', 'raise_challan', 'unused_parts', 'faulty_part',
+  'edit_challan', 'withdraw_challan',
 ]);
 
 /** Why a technician sees no next step - so the phone never just shows nothing. */
@@ -61,11 +61,10 @@ export async function GET(req: Request, { params }: Params) {
     // Calls with the customer since the complaint (call log, 27 Sep 2026).
     const calls = await callsWithParty(ctx.scope, d.customerId, new Date(d.createdAt.getTime() - 86_400_000)).catch(() => []);
     const job = await db.complaint.findUnique({ where: { id }, select: { storeId: true, onSiteSince: true, timeOnSiteSec: true, overrideUsed: true } });
-    const [settings, override, challans, faulty, items] = await Promise.all([
+    const [settings, override, parts, items] = await Promise.all([
       getJobSettings(job!.storeId),
       db.siteOverride.findFirst({ where: { complaintId: id, status: 'pending' }, select: { id: true } }),
-      jobChallansFor(ctx.scope, id),
-      faultyPartsFor(ctx.scope, { complaintId: id }),
+      phoneJobParts(ctx.scope, id, job!.storeId, ctx.user.id),
       complaintItems(ctx.scope, { id, customerId: d.customerId, createdAt: d.createdAt }),
     ]);
     return {
@@ -94,19 +93,7 @@ export async function GET(req: Request, { params }: Params) {
       timeOnSiteSec: job?.timeOnSiteSec ?? 0,
       overrideUsed: job?.overrideUsed ?? false,
       // Workflow slice 4: the job's challans (status, GDN) and faulty parts - never sent to customers.
-      parts: {
-        challans: challans.map((c) => ({ id: c.id, challanNo: c.challanNo, type: c.type, status: c.status, rejectionReason: c.rejectionReason, gdnNos: c.gdnNos, lines: c.lines })),
-        faulty: faulty.map((f) => ({ id: f.id, description: f.description, serialNo: f.serialNo, receivedAt: f.receivedAt })),
-        /**
-         * Whether THIS business still lets a technician raise the challan
-         * (F1a). The server refuses it either way; this is so the next phone
-         * build can hide the button instead of offering something that will
-         * be rejected. Older builds ignore the field and get the refusal with
-         * its reason, which is the correct behaviour for a build that predates
-         * the setting.
-         */
-        canRaiseChallan: await stepBlockedReason(job!.storeId, 'job.challan', 'technician') === null,
-      },
+      parts,
     };
   });
 }
@@ -225,9 +212,18 @@ export async function POST(req: Request, { params }: Params) {
         const r = await raiseJobChallan(ctx.scope, id, { type: String(b.type ?? ''), lines, note: str(b.note, 1000) }, ctx.user.id, 'technician');
         return { ok: true, challanNo: r.challanNo, complaint: await getComplaintDetail(ctx.scope, id) };
       }
+      // A challan not yet issued, put right by whoever raised it (22 Oct 2026).
+      case 'edit_challan': {
+        const lines = Array.isArray(b.lines) ? (b.lines as Record<string, unknown>[]).map((l) => ({ productId: String(l?.productId ?? ''), qty: Number(l?.qty ?? 0) })) : [];
+        await editJobChallan(ctx.scope, str(b.challanId, 60) ?? '', { complaintId: id }, { type: str(b.type, 20), lines, note: str(b.note, 1000) }, ctx.user.id, 'technician');
+        break;
+      }
+      case 'withdraw_challan':
+        await withdrawJobChallan(ctx.scope, str(b.challanId, 60) ?? '', { complaintId: id }, str(b.reason, 500), ctx.user.id, 'technician');
+        break;
       case 'unused_parts':
         // A request: the store receives them before stock moves (28 Sep 2026).
-        await requestPartsReturn(ctx.scope, str(b.lineId, 60) ?? '', Number(b.qty ?? 0), ctx.user.id);
+        await requestPartsReturn(ctx.scope, str(b.lineId, 60) ?? '', Number(b.qty ?? 0), ctx.user.id, { complaintId: id });
         break;
       case 'faulty_part':
         await logFaultyPart(ctx.scope, id, { productId: str(b.productId, 60), description: str(b.description, 300) ?? '', serialNo: str(b.serialNo, 100) }, ctx.user.id);

@@ -44,7 +44,9 @@ export type JobAction = 'accept' | 'decline' | 'on_the_way' | 'on_site' | 'leave
 /** Parts on a job (workflow slice 4) - challans with status and GDN, faulty parts. */
 export interface JobParts {
   challans: { id: string; challanNo: string; type: string; status: string; rejectionReason: string | null; gdnNos: string[];
-    lines: { id: string; productName: string; productCode: string; qty: number; qtyIssued: number; qtyReturned: number; qtyReturnPending?: number }[] }[];
+    /** `mine`: I raised it, so I may change or withdraw it until the store issues it (servers from 22 Oct 2026). */
+    note?: string | null; mine?: boolean;
+    lines: { id: string; productId?: string; productName: string; productCode: string; qty: number; qtyIssued: number; qtyReturned: number; qtyReturnPending?: number }[] }[];
   faulty: { id: string; description: string; serialNo: string | null; receivedAt: string | null }[];
   /**
    * Whether this business still lets a technician raise the challan
@@ -264,6 +266,8 @@ export interface InstallationItem {
   scannable: boolean; scanned: boolean;
   /** Where it goes on site, and to_fit | fitted | tested (servers from 11 Oct 2026). */
   placement?: string | null; fitStatus?: string;
+  /** Unused, back against the order's GDN - received / waiting for the store (servers from 22 Oct 2026). */
+  qtyReturned?: number; qtyReturnPending?: number;
 }
 
 export interface InstallationDetail {
@@ -275,14 +279,29 @@ export interface InstallationDetail {
   /** Working stage (servers from 11 Oct 2026). `nextStage` is null when the next step is handover / approval. */
   stage?: string; stageLabel?: string; nextStage?: string | null; nextStageLabel?: string | null;
   stages?: { key: string; label: string }[]; priority?: string;
+  /** The order's goods have left on its GDN - only then can unused ones come back (22 Oct 2026). */
+  dispatched?: boolean;
 }
 
 export const myInstallations = (all = false) =>
   authed<{ installations: InstallationRow[]; canEdit: boolean; scope: string }>(
     `/api/v1/jobs/installations${all ? '?all=1' : ''}`);
 
+/**
+ * `parts`: the installation's material challans - cable, clamps (22 Oct 2026),
+ * null when the role has parts switched off. `onTeam` / `working`: whether
+ * this person may send goods back and ask for material. Absent from an older server.
+ */
 export const installation = (id: string) =>
-  authed<{ installation: InstallationDetail; canEdit: boolean }>(`/api/v1/jobs/installations/${id}`);
+  authed<{ installation: InstallationDetail; canEdit: boolean; onTeam?: boolean; working?: boolean; parts?: JobParts | null }>(`/api/v1/jobs/installations/${id}`);
+
+/** N of an item are unused and coming back - a request; the store receives them (22 Oct 2026). */
+export const returnInstallationItem = (id: string, challanItemId: string, qty: number) =>
+  send<{ ok: true }>(`/api/v1/jobs/installations/${id}`, { action: 'return_unused', challanItemId, qty }, { label: `${qty} unused back`, target: `installation:${id}` });
+
+/** A Parts card step on an installation (raise a material challan, unused material back) - `op` as the card sends it. */
+export const installationPartsAction = (id: string, body: Record<string, unknown>) =>
+  send<{ ok: true; challanNo?: string }>(`/api/v1/jobs/installations/${id}`, { ...body, action: body.op }, { label: String(body.op ?? 'Parts'), target: `installation:${id}` });
 
 export const scanOntoInstallation = (id: string, challanItemId: string, serialNo: string) =>
   send<{ ok: true }>(`/api/v1/jobs/installations/${id}`, { action: 'scan', challanItemId, serialNo }, { label: `Scanned ${serialNo}`, target: `installation:${id}` });
@@ -305,15 +324,22 @@ export interface VisitCall {
 export interface VisitDetail {
   id: string; scheduledAt: string; status: string; purpose: string; outcomeNote: string | null;
   checkedInAt: string | null; checkInWithinRange: boolean | null; technicianName: string;
-  complaintId: string; complaintNo: string; description: string;
+  /** Null for an installation's visit - then installationChallanId is set (servers from 7 Oct 2026). */
+  complaintId: string | null; installationChallanId?: string | null; complaintNo: string; description: string;
   customerName: string; phone: string | null;
   siteName: string | null; siteAddress: string | null; siteLat: number | null; siteLng: number | null;
   calls: VisitCall[];
   changes: { kind: string; fromAt: string; toAt: string | null; reason: string; requestedByCustomer: boolean; createdAt: string }[];
 }
 
+/**
+ * `parts` is the Parts card of the visit's job (22 Oct 2026) - a complaint's
+ * or an installation's material - null when the role has parts switched off,
+ * absent from an older server. Its buttons go through that job's own actions.
+ * `partsOnSite`: the job is being worked on site, so material can be asked for.
+ */
 export const visit = (id: string) =>
-  authed<{ visit: VisitDetail; canEdit: boolean }>(`/api/v1/jobs/visits/${id}`);
+  authed<{ visit: VisitDetail; canEdit: boolean; complaintStatus?: string | null; parts?: JobParts | null; partsOnSite?: boolean }>(`/api/v1/jobs/visits/${id}`);
 
 export const moveVisit = (id: string, scheduledAt: string, reason: string, requestedByCustomer: boolean) =>
   send<{ ok: true }>(`/api/v1/jobs/visits/${id}`, { scheduledAt, reason, requestedByCustomer }, { label: 'Visit moved', target: `visit:${id}` });

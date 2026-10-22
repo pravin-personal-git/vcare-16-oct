@@ -313,17 +313,17 @@ const HANDLERS: Record<string, ApprovalHandler> = {
 
   job_challan: {
     async describe(storeId, id) {
-      const r = await db.jobChallan.findFirst({ where: { id, storeId }, select: { challanNo: true, createdBy: true, note: true, lines: { select: { qty: true, product: { select: { productName: true } } } }, complaint: { select: { complaintNo: true } } } });
-      return r && { title: `Parts for ${r.complaint.complaintNo}: challan ${r.challanNo}`, summary: r.lines.map((l) => `${l.product.productName} × ${l.qty}`).join(', ') + (r.note ? ` - ${r.note}` : ''), amountPaise: null, requesterId: r.createdBy };
+      const r = await db.jobChallan.findFirst({ where: { id, storeId }, select: { challanNo: true, createdBy: true, note: true, lines: { select: { qty: true, product: { select: { productName: true } } } }, complaint: { select: { complaintNo: true } }, installationChallan: { select: { challanNo: true } } } });
+      return r && { title: `Parts for ${r.complaint?.complaintNo ?? r.installationChallan?.challanNo ?? '-'}: challan ${r.challanNo}`, summary: r.lines.map((l) => `${l.product.productName} × ${l.qty}`).join(', ') + (r.note ? ` - ${r.note}` : ''), amountPaise: null, requesterId: r.createdBy };
     },
     async decide(scope, id, decision, userId, note) {
       const { decideJobChallan } = await import('./job-challans');
       await decideJobChallan(scope, id, decision, userId, note);
     },
     async pendingDirect(storeId) {
-      const rows = await db.jobChallan.findMany({ where: { storeId, status: 'pending_approval' }, take: TAKE, select: { id: true, challanNo: true, createdBy: true, createdAt: true, complaint: { select: { complaintNo: true } } } });
+      const rows = await db.jobChallan.findMany({ where: { storeId, status: 'pending_approval' }, take: TAKE, select: { id: true, challanNo: true, createdBy: true, createdAt: true, complaint: { select: { complaintNo: true } }, installationChallan: { select: { challanNo: true } } } });
       const free = await noRequestFor('job_challan', rows.map((r) => r.id));
-      return rows.filter((r) => free(r.id)).map((r) => ({ id: r.id, title: `Parts for ${r.complaint.complaintNo}: challan ${r.challanNo}`, summary: null, amountPaise: null, requesterId: r.createdBy, since: r.createdAt }));
+      return rows.filter((r) => free(r.id)).map((r) => ({ id: r.id, title: `Parts for ${r.complaint?.complaintNo ?? r.installationChallan?.challanNo ?? '-'}: challan ${r.challanNo}`, summary: null, amountPaise: null, requesterId: r.createdBy, since: r.createdAt }));
     },
   },
 

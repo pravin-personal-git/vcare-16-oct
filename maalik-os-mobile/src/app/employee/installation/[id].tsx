@@ -8,11 +8,12 @@ import { Empty, Loading, Pill, SectionLabel, Segmented, SubScreen, fmtDate, useL
 import { Scanner } from '@/components/Scanner';
 import { Icon } from '@/components/Icon';
 import { JobMedia } from '@/components/JobMedia';
+import { JobPartsCard } from '@/components/JobPartsCard';
 import { Waiting } from '@/components/OfflineBar';
 import { isQueued } from '@/lib/outbox';
 import {
-  installation, installationWorkDone, moveInstallationStage, scanOntoInstallation, updateInstallationItem,
-  type InstallationItem,
+  installation, installationPartsAction, installationWorkDone, moveInstallationStage, returnInstallationItem, scanOntoInstallation,
+  updateInstallationItem, type InstallationItem,
 } from '@/lib/jobs';
 import { dialable, useAccess } from '@/lib/access';
 import { space } from '@/theme/tokens';
@@ -28,6 +29,12 @@ import { space } from '@/theme/tokens';
  * signal in a basement or a stairwell; sending six cameras in one request means
  * losing all six because the last one failed. Each scan is its own call, and
  * the one that fails is the one you do again.
+ *
+ * UNUSED GOODS GO BACK FROM HERE (22 Oct 2026, Vcare): ten cameras left on the
+ * order's GDN, eight were fitted - "Unused - send back to store" says two are
+ * coming back, and the store adds them to stock when it receives them. The
+ * Parts card below asks for what is not on the order (cable, clamps) on a
+ * material challan, and sends unused material back the same way.
  */
 export default function Installation() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -43,6 +50,10 @@ export default function Installation() {
   const [notice, setNotice] = useState<string | null>(null);
   const queuedOrDone = (r: unknown) => { if (isQueued(r)) setNotice(t(r.message)); };
   const [scanning, setScanning] = useState<InstallationItem | null>(null);
+  // The item whose unused goods are being sent back, and how many.
+  const [returning, setReturning] = useState<{ id: string; n: string } | null>(null);
+  const [partsBusy, setPartsBusy] = useState<string | null>(null);
+  const [partsMsg, setPartsMsg] = useState<{ tone: 'success' | 'danger' | 'warning'; text: string } | null>(null);
 
   const j = data?.installation;
   const canEdit = data?.canEdit ?? false;
@@ -97,6 +108,29 @@ export default function Installation() {
     if ((item.placement ?? '') === placement.trim()) return;
     void run(() => updateInstallationItem(String(id), item.id, { placement }), t('Could not save that.'));
   };
+  const sendBack = (item: InstallationItem, n: number) =>
+    run(async () => {
+      const r = await returnInstallationItem(String(id), item.id, n);
+      setReturning(null);
+      if (!isQueued(r)) setNotice(t('Noted - hand them in at the store; the store adds them back to stock.'));
+      return r;
+    }, t('Could not send that back.'));
+
+  /** A Parts card step - the installation's own action, queued on the phone with no signal. */
+  const partsAct = async (key: string, body: Record<string, unknown>, done?: string) => {
+    setPartsBusy(key); setPartsMsg(null);
+    try {
+      const r = await installationPartsAction(String(id), body);
+      setPartsMsg(isQueued(r) ? { tone: 'warning', text: t(r.message) } : done ? { tone: 'success', text: t(done) } : null);
+      void reload();
+      return r;
+    } catch (e) {
+      setPartsMsg({ tone: 'danger', text: e instanceof Error ? t(e.message) : t('Could not reach the server. Check the connection and try again.') });
+      return null;
+    } finally {
+      setPartsBusy(null);
+    }
+  };
 
   if (loading && !j) return <SubScreen title={t('Installation')}><Loading /></SubScreen>;
   if (!j) {
@@ -109,6 +143,9 @@ export default function Installation() {
   }
 
   const left = j.items.filter((i) => i.scannable && !i.scanned).length;
+  // Goods go back only by the installation's team, once the order's GDN sent them,
+  // and not once billed - then the office uses a Sales Return on the invoice.
+  const mayReturn = canEdit && data?.onTeam === true && j.dispatched === true && !j.isInvoiced;
   const phone = dialable(access.hide.customerPhone ? null : j.phone, j.phone);
 
   return (
@@ -265,8 +302,35 @@ export default function Installation() {
               )}
             </View>
           )}
+          {/* Unused, back to the store (22 Oct 2026). */}
+          {(i.qtyReturned ?? 0) > 0 && (
+            <Text variant="small" color={c.inkSoft} style={{ marginTop: space.sm }}>
+              {i.qtyReturned} {t('back at the store')} · {i.qty - (i.qtyReturned ?? 0)} {t('stay on site')}
+            </Text>
+          )}
+          {(i.qtyReturnPending ?? 0) > 0 && (
+            <Text variant="small" color={c.warning} style={{ marginTop: space.sm }}>
+              {t(`${i.qtyReturnPending} to hand in at the store - it adds them back when it receives them`)}
+            </Text>
+          )}
+          {mayReturn && i.productId && i.qty - (i.qtyReturned ?? 0) - (i.qtyReturnPending ?? 0) > 0 && (returning?.id === i.id ? (
+            <View style={{ flexDirection: 'row', gap: space.sm, alignItems: 'flex-end', marginTop: space.sm }}>
+              <View style={{ flex: 1 }}>
+                <Field label={t('How many unused?')} keyboardType="number-pad" value={returning.n} onChangeText={(n) => setReturning({ id: i.id, n })} />
+              </View>
+              <Button label={t('Send back')} loading={busy} onPress={() => { void sendBack(i, Number(returning.n)); }} />
+            </View>
+          ) : (
+            <Button variant="ghost" label={t('Unused - send back to store')} onPress={() => setReturning({ id: i.id, n: '1' })} style={{ marginTop: space.sm }} />
+          ))}
         </Card>
       ))}
+
+      {/* ---- material not on the order: cable, clamps (22 Oct 2026) ----- */}
+      {partsMsg && <Banner tone={partsMsg.tone}>{partsMsg.text}</Banner>}
+      {data?.parts && canEdit && data.onTeam && (
+        <JobPartsCard parts={data.parts} onSite={data.working === true} busy={partsBusy} send={partsAct} faultyParts={false} />
+      )}
 
       {j.items.length === 0 && (
         <Empty icon="box" title={t('Nothing on this challan')} line={t('The office has not added any lines yet.')} />

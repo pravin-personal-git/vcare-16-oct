@@ -4681,6 +4681,9 @@ model InstallationChallan {
 
   items     InstallationChallanItem[]
   assignees InstallationChallanAssignee[]
+  /// Material challans for cable, clamps and the like that are not on the
+  /// order (22 Oct 2026, R3) - the complaint's challan engine, raised here.
+  jobChallans JobChallan[]
 
   /// BILLED OR NOT. Added 2 Oct 2026, mirroring `SalesOrder.isInvoiced`.
   ///
@@ -4749,6 +4752,12 @@ model InstallationChallanItem {
   serialNo         String?
   /// to_fit | fitted | tested
   fitStatus        String  @default("to_fit")
+
+  /// UNUSED, COMING BACK (22 Oct 2026, R2). The technician says how many are
+  /// coming back - a request only; stock moves when the store receives them,
+  /// against the order's GDN. Billed = qty - qtyReturned.
+  qtyReturnPending Int @default(0)
+  qtyReturned      Int @default(0)
 
   /// The unit that left on this line, now that units exist (Phase 3).
   /// `barcode` above stays as the text that was on the slip - the historical
@@ -5423,6 +5432,11 @@ model SalesOrderItem {
 
   /// Dispatched so far. Enables partial dispatch without a second table.
   dispatchedQty Int @default(0)
+  /// Unused, back from an installation and received into stock (22 Oct 2026,
+  /// R2). Still out with the customer = dispatchedQty - returnedQty; the order's
+  /// own return, cancel and invoice all count from that, so nothing comes back
+  /// twice and nothing that came back is billed.
+  returnedQty   Int @default(0)
 
   /// The AMC on this line, carried from the quotation and on to the invoice.
   /// See `InvoiceItem.amcOpted`.
@@ -11488,8 +11502,13 @@ model JobChallan {
   id              String           @id @default(cuid())
   storeId         String
   challanNo       String
-  complaintId     String
-  complaint       Complaint        @relation(fields: [complaintId], references: [id], onDelete: Cascade)
+  /// WHOSE JOB - exactly one of complaintId and installationChallanId (a
+  /// database CHECK, like ServiceVisit). An installation's challan carries the
+  /// material that is not on the order: cable, clamps, connectors (22 Oct 2026, R3).
+  complaintId     String?
+  complaint       Complaint?       @relation(fields: [complaintId], references: [id], onDelete: Cascade)
+  installationChallanId String?
+  installationChallan   InstallationChallan? @relation(fields: [installationChallanId], references: [id], onDelete: Cascade)
   /// material | replacement | installation
   type            String           @default("material")
   /// pending_approval | approved | rejected | issued
@@ -11517,6 +11536,7 @@ model JobChallan {
   @@unique([storeId, challanNo])
   @@index([storeId, status])
   @@index([complaintId])
+  @@index([installationChallanId])
 }
 
 model JobChallanLine {

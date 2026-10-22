@@ -75,6 +75,8 @@ const COMPLAINTS = ['complaints.view', 'complaints.edit'];
 const LEADS = ['leads.view', 'leads.edit', 'leads.create'];
 const STOCK = ['stock.view', 'purchase.view', 'purchase.edit'];
 const ORDERS = ['orders.view', 'orders.edit'];
+/** A fitting is installations.* on the website; orders.* still opens it as before (22 Oct 2026). */
+const INSTALLS = [...ORDERS, 'installations.view', 'installations.edit'];
 
 export const ACCESS_KEYS: AccessKey[] = [
   {
@@ -92,7 +94,7 @@ export const ACCESS_KEYS: AccessKey[] = [
   // that broke; an installation challan is work that was sold. Sharing one
   // list made a technician read past four repairs to find the fitting they
   // were standing outside, which is Pravin's point 3.
-  { key: 'section.installations', group: 'sections', label: 'Installations', kind: 'bool', merge: 'or', default: true, needs: ORDERS, hint: 'Fittings to do: the challan, what goes in, scanning each item as it is fitted.' },
+  { key: 'section.installations', group: 'sections', label: 'Installations', kind: 'bool', merge: 'or', default: true, needs: INSTALLS, hint: 'Fittings to do: the challan, what goes in, scanning each item as it is fitted.' },
   // What the person is carrying. Switched off, the app never mentions a van -
   // which is right for a shop whose technicians draw parts per job.
   { key: 'section.van', group: 'sections', label: 'Van stock', kind: 'bool', merge: 'or', default: true, needs: STOCK, hint: 'What they are carrying, and marking it used on site.' },
@@ -154,7 +156,7 @@ export const ACCESS_KEYS: AccessKey[] = [
   { key: 'layout.filter.week', group: 'layout', label: 'Filter: This week', kind: 'bool', merge: 'or', default: false, hint: 'Jobs with a visit in the next 7 days.' },
   { key: 'layout.filter.all', group: 'layout', label: 'Filter: All', kind: 'bool', merge: 'or', default: false, hint: 'Everything in their list, in one go.' },
   { key: 'layout.type.complaints', group: 'layout', label: 'Show complaints', kind: 'bool', merge: 'or', default: true, needs: COMPLAINTS, hint: 'Service jobs assigned to them.' },
-  { key: 'layout.type.installations', group: 'layout', label: 'Show installations', kind: 'bool', merge: 'or', default: true, needs: ORDERS, hint: 'Installation jobs they are on, in the same list with an "Installation" tag.' },
+  { key: 'layout.type.installations', group: 'layout', label: 'Show installations', kind: 'bool', merge: 'or', default: true, needs: INSTALLS, hint: 'Installation jobs they are on, in the same list with an "Installation" tag.' },
   { key: 'layout.schedule', group: 'layout', label: 'Schedule screen', kind: 'bool', merge: 'or', default: true, hint: 'Their visits by time - today, then tomorrow.' },
   { key: 'layout.job.callnav', group: 'layout', label: 'Job: Call and Navigate', kind: 'bool', merge: 'or', default: true, hint: 'Big Call and Navigate buttons. "Hide customer phone numbers" still applies.' },
   { key: 'layout.job.photo', group: 'layout', label: 'Job: Photo', kind: 'bool', merge: 'or', default: true, hint: 'Take a photo, saved on the job.' },

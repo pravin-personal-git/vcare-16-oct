@@ -36,8 +36,10 @@ export interface ComplaintGdnVM {
   issuedAt: string;
   cancelledAt: string | null;
   cancelReason: string | null;
-  complaintId: string;
+  complaintId: string | null;
+  /** The job's number - a complaint's or an installation's (R3) - and its page. */
   complaintNo: string;
+  jobHref: string;
   customerId?: string | null;
   customerName: string;
   challanNo: string;
@@ -170,7 +172,7 @@ export function ComplaintGdnsClient({ rows, highlight }: {
                           )}
                         </td>
                         <td className="px-4 py-2.5">
-                          <Link href={`/services/complaints/${r.complaintId}`} className="font-mono text-brand hover:underline">
+                          <Link href={r.jobHref} className="font-mono text-brand hover:underline">
                             {r.complaintNo}
                           </Link>
                         </td>

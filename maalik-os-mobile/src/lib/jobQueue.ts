@@ -24,11 +24,14 @@ const STALE_MS = 3 * 60_000;
 /**
  * F-13 (13 Oct 2026): accepting a job, booking / moving a visit, raising a
  * parts challan and reporting unused / faulty parts queue too. Only the
- * customer's code (an SMS round trip) still needs signal.
+ * customer's code (an SMS round trip) still needs signal. Changing or
+ * withdrawing a challan queues too (22 Oct 2026) - if it was approved
+ * meanwhile, the server refuses it and the reason is listed.
  */
 export const QUEUEABLE = new Set([
   'on_the_way', 'on_site', 'leave_site', 'work_done', 'note', 'pickup',
   'accept', 'book_visit', 'change_visit', 'raise_challan', 'unused_parts', 'faulty_part',
+  'edit_challan', 'withdraw_challan',
 ]);
 
 export interface QueuedStep { opId: string; complaintId: string; body: Record<string, unknown>; at: string; label: string }

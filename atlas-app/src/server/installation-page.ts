@@ -62,7 +62,10 @@ export interface InstallationPage {
   order: { id: string; orderNo: string; totalPaise: number; quotation: { id: string; no: string } | null } | null;
   team: { id: string; name: string; phone: string | null }[];
   technicians: { id: string; name: string }[];
-  items: { id: string; productId: string | null; productName: string; qty: number; placement: string | null; serialNo: string | null; fitStatus: string }[];
+  /** qtyReturned / qtyReturnPending: unused, back against the order's GDN (R2, 22 Oct 2026). */
+  items: { id: string; productId: string | null; productName: string; qty: number; qtyReturned: number; qtyReturnPending: number; placement: string | null; serialNo: string | null; fitStatus: string }[];
+  /** Goods left on the order's GDN - nothing can come back before. */
+  dispatched: boolean;
   survey: Record<string, boolean | string | number>;
   testing: Record<string, boolean>;
   materials: MaterialRow[];
@@ -84,6 +87,7 @@ export async function getInstallationPage(scope: StoreScope, id: string): Promis
       salesOrder: {
         select: {
           id: true, orderNo: true, grandTotalPaise: true, partyId: true, customerName: true, phone: true,
+          items: { select: { dispatchedQty: true } },
           quotation: { select: { id: true, quotationNo: true } },
           installationChallans: { where: { deletedAt: null }, select: { id: true, challanNo: true, stage: true } },
         },
@@ -122,7 +126,8 @@ export async function getInstallationPage(scope: StoreScope, id: string): Promis
     order: c.salesOrder ? { id: c.salesOrder.id, orderNo: c.salesOrder.orderNo, totalPaise: c.salesOrder.grandTotalPaise, quotation: c.salesOrder.quotation ? { id: c.salesOrder.quotation.id, no: c.salesOrder.quotation.quotationNo } : null } : null,
     team: c.assignees.map((a) => ({ id: a.user.id, name: a.user.fullName, phone: a.user.phone })),
     technicians: techs.map((t) => ({ id: t.id, name: t.fullName })),
-    items: c.items.map((i) => ({ id: i.id, productId: i.productId, productName: i.productName, qty: i.qty, placement: i.placement, serialNo: i.serialNo ?? i.barcode, fitStatus: i.fitStatus })),
+    items: c.items.map((i) => ({ id: i.id, productId: i.productId, productName: i.productName, qty: i.qty, qtyReturned: i.qtyReturned, qtyReturnPending: i.qtyReturnPending, placement: i.placement, serialNo: i.serialNo ?? i.barcode, fitStatus: i.fitStatus })),
+    dispatched: (c.salesOrder?.items ?? []).some((i) => i.dispatchedQty > 0),
     survey: json(c.surveyJson),
     testing: json(c.testingJson),
     materials: Array.isArray(c.materialsJson) ? (c.materialsJson as unknown as MaterialRow[]) : [],

@@ -96,6 +96,22 @@ async function complaintIdFor(kind: TrailKind, id: string, where: Where): Promis
 }
 
 /**
+ * The installation a material challan or its GDN belongs to (R3, 22 Oct 2026):
+ * cable and clamps raised on an installation, not on a complaint.
+ */
+async function installationIdFor(kind: TrailKind, id: string, where: Where): Promise<string | null> {
+  if (kind === 'challan') {
+    const c = await db.jobChallan.findFirst({ where: { id, ...where }, select: { installationChallanId: true } });
+    return c?.installationChallanId ?? null;
+  }
+  if (kind === 'gdn') {
+    const g = await db.materialIssue.findFirst({ where: { id, ...where }, select: { challan: { select: { installationChallanId: true } } } });
+    return g?.challan.installationChallanId ?? null;
+  }
+  return null;
+}
+
+/**
  * Resolve the chain around one document.
  *
  * Deliberately tolerant: a sale raised directly as an invoice, with no
@@ -131,11 +147,19 @@ export async function documentTrail(
   let complaintId: string | null = null;
   if (SERVICE_KINDS.includes(kind)) {
     complaintId = await complaintIdFor(kind, id, where);
-    if (!complaintId) return [];
-    const job = await db.complaint.findFirst({
-      where: { id: complaintId, ...where }, select: { invoiceId: true },
-    });
-    invoiceId = job?.invoiceId ?? null;
+    if (complaintId) {
+      const job = await db.complaint.findFirst({
+        where: { id: complaintId, ...where }, select: { invoiceId: true },
+      });
+      invoiceId = job?.invoiceId ?? null;
+    } else {
+      // An installation's material challan or GDN joins its installation's
+      // order chain instead (R3, 22 Oct 2026).
+      const installId = await installationIdFor(kind, id, where);
+      const ic = installId ? await db.installationChallan.findFirst({ where: { id: installId, ...where }, select: { salesOrderId: true } }) : null;
+      orderId = ic?.salesOrderId ?? null;
+      if (!orderId) return [];
+    }
   }
 
   if (kind === 'invoice') {
@@ -409,6 +433,12 @@ export async function documentTrail(
       orderBy: { dispatchedAt: 'asc' },
       select: { id: true, challanNo: true, stage: true },
     });
+    // Each installation's material challans and their GDNs (R3, 22 Oct 2026).
+    const material = installs.length ? await db.jobChallan.findMany({
+      where: { installationChallanId: { in: installs.map((i) => i.id) }, ...where },
+      orderBy: { createdAt: 'asc' },
+      select: { id: true, challanNo: true, type: true, status: true, installationChallanId: true, issues: { select: { id: true, gdnNo: true, cancelledAt: true } } },
+    }) : [];
     for (const ic of installs) {
       steps.push({
         kind: 'installation', id: ic.id, label: ic.challanNo,
@@ -416,6 +446,22 @@ export async function documentTrail(
         route: `/services/installations/${ic.id}`,
         current: kind === 'installation' && ic.id === id,
       });
+      for (const c of material.filter((m) => m.installationChallanId === ic.id)) {
+        steps.push({
+          kind: 'challan', id: c.id, label: c.challanNo,
+          detail: `${c.type} · ${c.status.replace(/_/g, ' ')}`,
+          route: `/services/installations/${ic.id}#challan-${c.id}`,
+          current: kind === 'challan' && c.id === id,
+        });
+        for (const g of c.issues) {
+          steps.push({
+            kind: 'gdn', id: g.id, label: g.gdnNo,
+            detail: g.cancelledAt ? 'cancelled' : 'issued',
+            route: `/goods-dispatch/complaint-gdns?gdn=${encodeURIComponent(g.gdnNo)}#gdn-${encodeURIComponent(g.gdnNo)}`,
+            current: kind === 'gdn' && g.id === id,
+          });
+        }
+      }
     }
   }
 

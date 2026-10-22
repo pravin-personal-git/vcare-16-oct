@@ -13,7 +13,7 @@ import {
 } from '@/server/complaints';
 import { resolveCoverageFor } from '@/server/amc';
 import { friendlyError } from '@/lib/friendly-error';
-import { cancelJobIssue, correctJobIssue, issueJobChallan, serialChoices, logFaultyPart, raiseJobChallan, receiveFaultyPart, receiveReturnedParts, requestPartsReturn, returnUnusedParts } from '@/server/job-challans';
+import { cancelJobIssue, correctJobIssue, editJobChallan, issueJobChallan, serialChoices, logFaultyPart, raiseJobChallan, receiveFaultyPart, receiveReturnedParts, requestPartsReturn, returnUnusedParts, withdrawJobChallan } from '@/server/job-challans';
 import { customerLinkToken, sendEstimate, type EstimateLine } from '@/server/job-customer';
 import { billJob, waiveJobBilling } from '@/server/job-billing';
 import { addComplaintItem, cancelComplaintItem, listCustomerEquipment, pickUpItems, requestWarrantyVoid, type ComplaintItemInput } from '@/server/complaint-items';
@@ -326,6 +326,22 @@ export async function raiseJobChallanAction(complaintId: string, input: { type: 
   return guard(async () => {
     const ctx = await requireContext();
     await raiseJobChallan(ctx.scope, complaintId, input, ctx.user.id, 'office');
+  });
+}
+
+/** Change a challan not yet approved (or rejected) - it goes for approval again (22 Oct 2026). */
+export async function editJobChallanAction(complaintId: string, challanId: string, input: { type: string; lines: { productId: string; qty: number }[]; note: string | null }): Promise<ActionState> {
+  return guard(async () => {
+    const ctx = await requireContext();
+    await editJobChallan(ctx.scope, challanId, { complaintId }, input, ctx.user.id, 'office');
+  });
+}
+
+/** Take back a challan nothing was issued on (22 Oct 2026). */
+export async function withdrawJobChallanAction(complaintId: string, challanId: string, reason: string | null): Promise<ActionState> {
+  return guard(async () => {
+    const ctx = await requireContext();
+    await withdrawJobChallan(ctx.scope, challanId, { complaintId }, reason, ctx.user.id, 'office');
   });
 }
 

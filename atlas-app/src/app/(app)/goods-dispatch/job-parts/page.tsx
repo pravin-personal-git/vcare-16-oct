@@ -1,6 +1,7 @@
 import { requireContext } from '@/server/context';
 import { challansToIssue, faultyPartsFor, returnsToReceive, stockShortfall } from '@/server/job-challans';
 import { getJobSettings } from '@/server/job-settings';
+import { installationReturnsToReceive } from '@/server/installation-returns';
 import { JobPartsQueue } from './JobPartsQueue';
 
 /**
@@ -13,7 +14,11 @@ import { JobPartsQueue } from './JobPartsQueue';
  */
 export default async function JobPartsPage() {
   const ctx = await requireContext();
-  const [challans, faulty, returns] = await Promise.all([challansToIssue(ctx.scope), faultyPartsFor(ctx.scope, { pendingOnly: true }), returnsToReceive(ctx.scope)]);
+  const [challans, faulty, returns, installReturns] = await Promise.all([
+    challansToIssue(ctx.scope), faultyPartsFor(ctx.scope, { pendingOnly: true }), returnsToReceive(ctx.scope),
+    // Unused goods back from an installation, against its order's GDN (R2, 22 Oct 2026).
+    installationReturnsToReceive(ctx.scope),
+  ]);
 
   // Why an approved challan is still here (15 Oct 2026): with the automatic
   // GDN on, the only reasons are serial items to pick and stock that is short
@@ -33,6 +38,7 @@ export default async function JobPartsPage() {
         serialNo: f.serialNo, productName: f.product?.productName ?? null, loggedAt: f.loggedAt.toISOString(),
       }))}
       returns={returns}
+      installReturns={installReturns}
       canIssue={ctx.permissions.has('stock.adjust')}
       autoGdn={autoGdn}
     />

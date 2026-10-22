@@ -14,13 +14,15 @@ import { technicianInstallations } from '@/server/field-app';
  * decision, not two.
  */
 export async function GET(req: Request) {
-  return field(req, ['orders.view', 'orders.edit'], 'installations', async (ctx, access) => {
+  // installations.* as on the website (22 Oct 2026: Vcare's Technician role has
+  // installations.edit but not orders.edit, so the phone refused its fittings).
+  return field(req, ['orders.view', 'orders.edit', 'installations.view', 'installations.edit'], 'installations', async (ctx, access) => {
     const all = access.scope.complaints === 'branch'
       && new URL(req.url).searchParams.get('all') === '1';
     const rows = await technicianInstallations(ctx.scope, ctx.user.id, { all });
     return {
       installations: rows,
-      canEdit: ctx.permissions.has('orders.edit'),
+      canEdit: ctx.permissions.has('orders.edit') || ctx.permissions.has('installations.edit'),
       scope: all ? 'branch' : 'mine',
     };
   });

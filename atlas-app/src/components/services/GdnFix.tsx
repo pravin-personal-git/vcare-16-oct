@@ -8,6 +8,7 @@ import { Field } from '@/components/ui/Layout';
 import {
   cancelJobIssueAction, correctJobIssueAction, issueJobChallanAction, receiveReturnedPartsAction, serialChoicesAction,
 } from '@/app/(app)/services/actions';
+import { installReceiveReturnAction } from '@/app/(app)/services/installations/actions';
 
 export interface GdnFixLine {
   id: string; productName: string; qtyIssued: number; qtyReturned: number; qtyReturnPending: number;
@@ -182,6 +183,29 @@ export function ReceiveBack({ lineId, qty, serial, units = [], onDone }: { lineI
           <SerialChecks units={units} need={qty} value={ids} onChange={setIds} />
         </Modal>
       )}
+    </>
+  );
+}
+
+/**
+ * Receive an installation's unused goods back (R2, 22 Oct 2026). No serial to
+ * pick: a scanned line names its unit, an unscanned one takes back this
+ * customer's own.
+ */
+export function ReceiveInstallBack({ challanId, itemId, qty, onDone }: { challanId: string; itemId: string; qty: number; onDone?: (msg: string) => void }) {
+  const router = useRouter();
+  const [pending, start] = useTransition();
+  const [error, setError] = useState<string | null>(null);
+  const go = () => start(async () => {
+    setError(null);
+    const r = await installReceiveReturnAction(challanId, itemId);
+    if (r.error) { setError(r.error); return; }
+    onDone?.(`${r.qty ?? qty} received back into stock.`); router.refresh();
+  });
+  return (
+    <>
+      <Button size="sm" loading={pending} onClick={go}>Receive {qty} into stock</Button>
+      {error && <span role="alert" className="text-xs text-danger">{error}</span>}
     </>
   );
 }

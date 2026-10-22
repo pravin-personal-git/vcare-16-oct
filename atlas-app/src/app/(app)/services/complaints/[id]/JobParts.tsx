@@ -9,8 +9,9 @@ import { Button } from '@/components/ui/Button';
 import { Modal } from '@/components/ui/Modal';
 import { ProductFinder, type FindableProduct } from '@/components/document/ProductFinder';
 import {
-  logFaultyPartAction, raiseJobChallanAction, receiveFaultyPartAction, returnUnusedPartsAction,
+  editJobChallanAction, logFaultyPartAction, raiseJobChallanAction, receiveFaultyPartAction, returnUnusedPartsAction, withdrawJobChallanAction,
 } from '../../actions';
+import { installEditChallanAction, installRaiseChallanAction, installWithdrawChallanAction } from '../../installations/actions';
 import { GdnFix, IssueParts, ReceiveBack, ReceiveWithSerial } from '@/components/services/GdnFix';
 
 /**
@@ -36,11 +37,17 @@ const STATUS: Record<string, { label: string; tone: BadgeTone }> = {
   approved: { label: 'Approved - to issue', tone: 'info' },
   rejected: { label: 'Rejected', tone: 'danger' },
   issued: { label: 'Issued', tone: 'success' },
+  withdrawn: { label: 'Withdrawn', tone: 'neutral' },
 };
+/** Until the store issues it, a challan can be put right (22 Oct 2026): changed while waiting or rejected, withdrawn until issued. */
+const EDITABLE = ['pending_approval', 'rejected'];
+const WITHDRAWABLE = ['pending_approval', 'rejected', 'approved'];
 const TYPE: Record<string, string> = { material: 'Material', replacement: 'Replacement', installation: 'Installation' };
 
-export function JobParts({ complaintId, challans, faulty, catalogue, canEdit, canIssue, fmt, actionsElsewhere = false }: {
-  complaintId: string; challans: ChallanVM[]; faulty: FaultyVM[]; catalogue: FindableProduct[];
+export function JobParts({ complaintId, installationChallanId, challans, faulty, catalogue, canEdit, canIssue, fmt, actionsElsewhere = false }: {
+  /** Whose job: a complaint's, or an installation's material (R3, 22 Oct 2026) - one of the two. */
+  complaintId?: string; installationChallanId?: string;
+  challans: ChallanVM[]; faulty: FaultyVM[]; catalogue: FindableProduct[];
   canEdit: boolean; canIssue: boolean; fmt: (iso: string) => string;
   /** Layout A (9 Oct 2026): "Raise challan" and "Log faulty part" live in the page's actions rail. */
   actionsElsewhere?: boolean;
@@ -50,6 +57,8 @@ export function JobParts({ complaintId, challans, faulty, catalogue, canEdit, ca
   const [error, setError] = useState<string | null>(null);
   const [raising, setRaising] = useState(false);
   const [logging, setLogging] = useState(false);
+  const [editing, setEditing] = useState<ChallanVM | null>(null);
+  const [withdrawing, setWithdrawing] = useState<ChallanVM | null>(null);
   const run = (fn: () => Promise<{ error?: string }>) => start(async () => {
     setError(null);
     const r = await fn();
@@ -65,7 +74,9 @@ export function JobParts({ complaintId, challans, faulty, catalogue, canEdit, ca
       </div>
       {error && <p role="alert" className="mt-2 text-sm text-danger">{error}</p>}
       <ul className="mt-3 flex flex-col divide-y divide-border">
-        {challans.length === 0 && <li className="py-1 text-sm text-muted-foreground">No challans. The technician raises one on site when parts are needed.</li>}
+        {challans.length === 0 && <li className="py-1 text-sm text-muted-foreground">{installationChallanId
+          ? 'No material challans. Cable, clamps and anything else not on the order go out on one.'
+          : 'No challans. The technician raises one on site when parts are needed.'}</li>}
         {challans.map((c) => (
           // The trail's challan chip lands here (#challan-id).
           <li key={c.id} id={`challan-${c.id}`} className="scroll-mt-24 rounded-lg py-2.5 target:bg-brand/10 target:ring-2 target:ring-brand/40">
@@ -77,7 +88,9 @@ export function JobParts({ complaintId, challans, faulty, catalogue, canEdit, ca
               {(c.cancelledGdnNos ?? []).map((g) => <span key={g} className="font-mono text-xs text-muted-foreground line-through" title="Cancelled by the store">{g}</span>)}
             </p>
             <p className="text-xs text-muted-foreground">{c.createdByName ?? '-'} · {fmt(c.createdAt)}{c.note ? ` · ${c.note}` : ''}</p>
-            {c.rejectionReason && <p className="text-xs text-danger">Rejected: {c.rejectionReason}</p>}
+            {c.rejectionReason && (c.status === 'withdrawn'
+              ? <p className="text-xs text-muted-foreground">Withdrawn: {c.rejectionReason}</p>
+              : <p className="text-xs text-danger">Rejected: {c.rejectionReason}</p>)}
             <ul className="mt-1 text-sm">
               {c.lines.map((l) => (
                 <li key={l.id} className="flex flex-wrap items-center gap-2 py-0.5">
@@ -97,6 +110,16 @@ export function JobParts({ complaintId, challans, faulty, catalogue, canEdit, ca
               ))}
             </ul>
             {c.status === 'pending_approval' && <p className="mt-1 text-xs text-muted-foreground">Approvers see it in My Desk → Waiting on me.</p>}
+            {canEdit && c.type !== 'handback' && WITHDRAWABLE.includes(c.status) && (
+              <div className="mt-1 flex flex-wrap gap-3">
+                {EDITABLE.includes(c.status) && (
+                  <button type="button" className="text-xs font-medium text-brand hover:underline" onClick={() => setEditing(c)}>
+                    {c.status === 'rejected' ? 'Change and send again' : 'Change'}
+                  </button>
+                )}
+                <button type="button" className="text-xs font-medium text-danger hover:underline" onClick={() => setWithdrawing(c)}>Withdraw</button>
+              </div>
+            )}
             {c.status === 'issued' && canIssue && c.gdnNos[0] && (
               <div className="mt-1"><GdnFix challanId={c.id} gdnNo={c.gdnNos[0]} lines={c.lines} /></div>
             )}
@@ -107,6 +130,7 @@ export function JobParts({ complaintId, challans, faulty, catalogue, canEdit, ca
         ))}
       </ul>
 
+      {!installationChallanId && <>
       <div className="mt-3 flex items-center justify-between gap-2 border-t border-border pt-3">
         <h3 className="text-xs font-semibold">Faulty parts taken out</h3>
         {canEdit && !actionsElsewhere && <button type="button" className="text-xs font-medium text-brand hover:underline" onClick={() => setLogging(true)}>Log faulty part</button>}
@@ -122,11 +146,30 @@ export function JobParts({ complaintId, challans, faulty, catalogue, canEdit, ca
           </li>
         ))}
       </ul>
+      </>}
       <p className="mt-2 text-xs text-muted-foreground">The store&apos;s queue: <Link href="/goods-dispatch/job-parts" className="text-brand hover:underline">Parts counter</Link></p>
 
       {raising && <RaiseChallan catalogue={catalogue} busy={pending} onClose={() => setRaising(false)}
-        onSave={(input) => { setRaising(false); run(() => raiseJobChallanAction(complaintId, input)); }} />}
-      {logging && <LogFaulty catalogue={catalogue} busy={pending} onClose={() => setLogging(false)}
+        installation={!!installationChallanId}
+        onSave={(input) => {
+          setRaising(false);
+          run(() => (installationChallanId ? installRaiseChallanAction(installationChallanId, input) : raiseJobChallanAction(complaintId ?? '', input)));
+        }} />}
+      {editing && <RaiseChallan catalogue={catalogue} busy={pending} onClose={() => setEditing(null)}
+        installation={!!installationChallanId}
+        initial={{ challanNo: editing.challanNo, type: editing.type, note: editing.note, lines: editing.lines.filter((l) => l.productId).map((l) => ({ productId: l.productId as string, name: l.productName, qty: l.qty })) }}
+        onSave={(input) => {
+          const id = editing.id;
+          setEditing(null);
+          run(() => (installationChallanId ? installEditChallanAction(installationChallanId, id, input) : editJobChallanAction(complaintId ?? '', id, input)));
+        }} />}
+      {withdrawing && <WithdrawChallan challanNo={withdrawing.challanNo} approved={withdrawing.status === 'approved'} busy={pending} onClose={() => setWithdrawing(null)}
+        onConfirm={(reason) => {
+          const id = withdrawing.id;
+          setWithdrawing(null);
+          run(() => (installationChallanId ? installWithdrawChallanAction(installationChallanId, id, reason) : withdrawJobChallanAction(complaintId ?? '', id, reason)));
+        }} />}
+      {logging && complaintId && <LogFaulty catalogue={catalogue} busy={pending} onClose={() => setLogging(false)}
         onSave={(input) => { setLogging(false); run(() => logFaultyPartAction(complaintId, input)); }} />}
     </section>
   );
@@ -146,24 +189,32 @@ function ReturnUnused({ max, store, busy, onReturn }: { max: number; store: bool
   );
 }
 
-export function RaiseChallan({ catalogue, busy, onClose, onSave }: {
+export function RaiseChallan({ catalogue, busy, onClose, onSave, installation = false, initial }: {
   catalogue: FindableProduct[]; busy: boolean; onClose: () => void;
+  /** An installation's challan: material only - a replacement is a complaint's job (R3). */
+  installation?: boolean;
+  /** Changing a challan already raised (22 Oct 2026): its lines, note and type to start from. */
+  initial?: { challanNo: string; type: string; note: string | null; lines: { productId: string; name: string; qty: number }[] };
   onSave: (input: { type: string; lines: { productId: string; qty: number }[]; note: string | null }) => void;
 }) {
-  const [type, setType] = useState('material');
+  const [type, setType] = useState(initial?.type ?? 'material');
   const [pick, setPick] = useState('');
   const [qty, setQty] = useState(1);
-  const [lines, setLines] = useState<{ productId: string; qty: number }[]>([]);
-  const [note, setNote] = useState('');
-  const name = (id: string) => catalogue.find((p) => p.id === id)?.name ?? id;
+  const [lines, setLines] = useState<{ productId: string; qty: number }[]>(initial?.lines.map((l) => ({ productId: l.productId, qty: l.qty })) ?? []);
+  const [note, setNote] = useState(initial?.note ?? '');
+  // A line already on the challan keeps its name even if the catalogue here no longer lists it.
+  const name = (id: string) => catalogue.find((p) => p.id === id)?.name ?? initial?.lines.find((l) => l.productId === id)?.name ?? id;
+  const setLineQty = (id: string, n: number) => setLines(lines.map((l) => (l.productId === id ? { ...l, qty: n } : l)));
+  const valid = lines.length > 0 && lines.every((l) => l.qty > 0);
   return (
-    <Modal title="Raise challan" icon="truck" size="lg" onClose={onClose}
-      footer={<><Button onClick={onClose}>Cancel</Button><Button variant="primary" loading={busy} disabled={!lines.length} onClick={() => onSave({ type, lines, note: note.trim() || null })}>Send for approval</Button></>}>
+    <Modal title={initial ? `Change challan ${initial.challanNo}` : 'Raise challan'} icon="truck" size="lg" onClose={onClose}
+      footer={<><Button onClick={onClose}>Cancel</Button><Button variant="primary" loading={busy} disabled={!valid} onClick={() => onSave({ type, lines, note: note.trim() || null })}>{initial ? 'Send for approval again' : 'Send for approval'}</Button></>}>
+      {initial && <p className="mb-3 text-xs text-muted-foreground">The approver sees the changed challan as a new request. Nothing has left the store yet, so no stock moves.</p>}
       <div className="grid gap-3">
         <Field label="Type" htmlFor="jc-type">
           <select id="jc-type" value={type} onChange={(e) => setType(e.target.value)} className="field-input">
             <option value="material">Material - parts to complete the job</option>
-            <option value="replacement">Replacement - swap the customer&apos;s unit</option>
+            {!installation && <option value="replacement">Replacement - swap the customer&apos;s unit</option>}
             <option value="installation">Installation - new equipment</option>
           </select>
         </Field>
@@ -175,14 +226,37 @@ export function RaiseChallan({ catalogue, busy, onClose, onSave }: {
         {lines.length > 0 && (
           <ul className="rounded-lg border border-border text-sm">
             {lines.map((l) => (
-              <li key={l.productId} className="flex items-center justify-between border-b border-border px-3 py-1.5 last:border-0">
-                <span>{name(l.productId)} × {l.qty}</span>
+              <li key={l.productId} className="flex items-center justify-between gap-2 border-b border-border px-3 py-1.5 last:border-0">
+                <span className="min-w-0 flex-1 truncate">{name(l.productId)}</span>
+                {/* The quantity can be changed right here - mostly what "change the challan" means. */}
+                <input type="number" min={1} aria-label={`Quantity of ${name(l.productId)}`} value={l.qty}
+                  onChange={(e) => setLineQty(l.productId, Number(e.target.value))} className="field-input h-8 w-20" />
                 <button type="button" className="text-xs text-danger" onClick={() => setLines(lines.filter((x) => x.productId !== l.productId))}>Remove</button>
               </li>
             ))}
           </ul>
         )}
         <Field label="Note" htmlFor="jc-note"><textarea id="jc-note" rows={2} value={note} onChange={(e) => setNote(e.target.value)} className="field-input" /></Field>
+      </div>
+    </Modal>
+  );
+}
+
+/** Take back a challan nothing was issued on (22 Oct 2026). The reason is optional and kept on the job. */
+function WithdrawChallan({ challanNo, approved, busy, onClose, onConfirm }: {
+  challanNo: string; approved: boolean; busy: boolean; onClose: () => void; onConfirm: (reason: string | null) => void;
+}) {
+  const [reason, setReason] = useState('');
+  return (
+    <Modal title={`Withdraw challan ${challanNo}`} icon="x" onClose={onClose}
+      footer={<><Button onClick={onClose}>Keep it</Button><Button variant="danger" loading={busy} onClick={() => onConfirm(reason.trim() || null)}>Withdraw challan</Button></>}>
+      <div className="grid gap-3">
+        <p className="text-sm text-muted-foreground">
+          {approved
+            ? 'It is approved but the store has not issued it, so nothing has left the store. It leaves the store\'s queue and stays on the job, crossed out.'
+            : 'It leaves the approvers\' list and stays on the job, crossed out. Nothing has left the store.'}
+        </p>
+        <Field label="Why (optional)" htmlFor="jc-why"><textarea id="jc-why" rows={2} value={reason} onChange={(e) => setReason(e.target.value)} className="field-input" /></Field>
       </div>
     </Modal>
   );

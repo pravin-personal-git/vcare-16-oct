@@ -16,9 +16,11 @@ import { openWhatsApp } from '@/lib/wa-open';
 import { formatCurrency } from '@/lib/format';
 import { INSTALL_STAGES, SURVEY_ITEMS, TESTING_ITEMS, nextStage, stageIndex, stageLabel, type MaterialRow } from '@/lib/installation-stages';
 import type { InstallationPage } from '@/server/installation-page';
+import type { FindableProduct } from '@/components/document/ProductFinder';
+import { JobParts, type ChallanVM } from '../../complaints/[id]/JobParts';
 import {
   installChecklistAction, installDecideAction, installHandoverAction, installItemsAction, installMaterialsAction,
-  installRemarkAction, installStageAction, installTeamAction, getInstallationShareLink,
+  installRemarkAction, installReturnAction, installStageAction, installTeamAction, getInstallationShareLink,
 } from '../actions';
 
 const fmt = (iso: string) => new Date(iso).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: 'numeric', minute: '2-digit', timeZone: 'Asia/Kolkata' });
@@ -46,7 +48,11 @@ function Panel({ title, sub, icon, right, children, pad = true }: { title: strin
   );
 }
 
-export function InstallationView({ data: d, files, canEdit }: { data: InstallationPage; files: unknown[]; canEdit: boolean }) {
+export function InstallationView({ data: d, files, canEdit, parts }: {
+  data: InstallationPage; files: unknown[]; canEdit: boolean;
+  /** Material challans (R3, 22 Oct 2026). */
+  parts?: { challans: ChallanVM[]; catalogue: FindableProduct[]; canIssue: boolean };
+}) {
   const router = useRouter();
   const [pending, start] = useTransition();
   const [error, setError] = useState<string | null>(null);
@@ -62,6 +68,8 @@ export function InstallationView({ data: d, files, canEdit }: { data: Installati
   const [team, setTeam] = useState<string[]>(d.team.map((t) => t.id));
   const [priority, setPriority] = useState(d.priority);
   const [remark, setRemark] = useState('');
+  // The line whose unused goods are being sent back, and how many (R2).
+  const [returning, setReturning] = useState<{ id: string; n: number } | null>(null);
 
   const locked = d.status === 'approved' || !canEdit;
   const run = (fn: () => Promise<{ error?: string; ok?: boolean }>, done?: string) => start(async () => {
@@ -225,7 +233,7 @@ export function InstallationView({ data: d, files, canEdit }: { data: Installati
           <Panel title={`What is being installed (${items.length})`} sub="Where each unit goes, its serial scanned on site, and whether it is tested - click the status to move it on" pad={false}>
             <div className="overflow-x-auto thin-scroll">
               <table className="w-full min-w-[560px] text-sm">
-                <thead className="bg-surface"><tr>{['Item', 'Qty', 'Location on site', 'Serial', 'Status'].map((h) => <th key={h} className="px-4 py-2 text-start text-micro font-semibold uppercase text-muted-foreground">{h}</th>)}</tr></thead>
+                <thead className="bg-surface"><tr>{['Item', 'Qty', 'Location on site', 'Serial', 'Status', 'Unused back'].map((h) => <th key={h} className="px-4 py-2 text-start text-micro font-semibold uppercase text-muted-foreground">{h}</th>)}</tr></thead>
                 <tbody>{items.map((it) => (
                   <tr key={it.id} className="border-t border-border">
                     <td className="px-4 py-2 font-medium">{it.productId ? <Link href={`/product-journey?product=${it.productId}`} className="hover:text-brand hover:underline">{it.productName}</Link> : it.productName}</td>
@@ -237,6 +245,22 @@ export function InstallationView({ data: d, files, canEdit }: { data: Installati
                       onBlur={(e) => { if (e.target.value !== (it.serialNo ?? '')) saveItem(it.id, { serialNo: e.target.value }); }}
                       className="h-8 w-full rounded-sm border border-transparent bg-transparent px-1.5 font-mono text-xs hover:border-border focus:border-brand focus:outline-none" /></td>
                     <td className="px-4 py-2"><button type="button" disabled={locked} onClick={() => saveItem(it.id, { fitStatus: cycleFit(it.fitStatus) })}><Badge tone={FIT[it.fitStatus]?.tone ?? 'neutral'}>{FIT[it.fitStatus]?.label ?? it.fitStatus}</Badge></button></td>
+                    {/* Unused, back against the order's GDN (R2): the store receives them at the Parts counter. */}
+                    <td className="px-4 py-2 text-xs">
+                      {it.qtyReturned > 0 && <span className="block tabular-nums">{it.qtyReturned} back · <strong>{it.qty - it.qtyReturned} stay</strong></span>}
+                      {it.qtyReturnPending > 0 && <span className="block text-warning">{it.qtyReturnPending} coming back - the store receives them</span>}
+                      {/* Once billed it comes back on a Sales Return against the invoice instead (D5). */}
+                      {!locked && d.dispatched && d.invoices.length === 0 && it.productId && it.qty - it.qtyReturned - it.qtyReturnPending > 0 && (returning?.id === it.id ? (
+                        <span className="inline-flex items-center gap-1.5">
+                          <input aria-label={`How many of ${it.productName} are unused`} type="number" min={1} max={it.qty - it.qtyReturned - it.qtyReturnPending} value={returning.n}
+                            onChange={(e) => setReturning({ id: it.id, n: Number(e.target.value) })} className="h-7 w-14 rounded border border-border bg-card px-1.5 text-xs" />
+                          <Button size="sm" loading={pending} onClick={() => { const n = returning.n; setReturning(null); run(() => installReturnAction(d.id, it.id, n), 'Noted - the store receives them at the Parts counter'); }}>Send back</Button>
+                          <button type="button" className="text-muted-foreground" onClick={() => setReturning(null)}>Cancel</button>
+                        </span>
+                      ) : (
+                        <button type="button" className="font-medium text-brand hover:underline" onClick={() => setReturning({ id: it.id, n: 1 })}>Unused - send back</button>
+                      ))}
+                    </td>
                   </tr>
                 ))}</tbody>
               </table>
@@ -245,6 +269,11 @@ export function InstallationView({ data: d, files, canEdit }: { data: Installati
               <span>Warranty on each serial starts at handover.</span><span className="font-mono">{tested}/{items.length} tested</span>
             </div>
           </Panel>
+
+          {parts && (
+            <JobParts installationChallanId={d.id} challans={parts.challans} faulty={[]} catalogue={parts.catalogue}
+              canEdit={!locked} canIssue={parts.canIssue} fmt={fmt} />
+          )}
 
           <div className="grid gap-4 md:grid-cols-2">
             <Panel title="Site survey" icon="map-pin" sub="Filled on the first visit - before material goes out">

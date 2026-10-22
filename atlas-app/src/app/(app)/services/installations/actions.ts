@@ -16,6 +16,9 @@ import {
 } from '@/server/installation-page';
 import type { MaterialRow } from '@/lib/installation-stages';
 import { friendlyError } from '@/lib/friendly-error';
+import { InstallationReturnError, receiveInstallationReturn, requestInstallationReturn } from '@/server/installation-returns';
+import { ComplaintError } from '@/server/complaints';
+import { editJobChallan, raiseInstallationChallan, withdrawJobChallan } from '@/server/job-challans';
 
 export interface ActionState {
   error?: string;
@@ -156,7 +159,8 @@ async function pageGuard(id: string, run: (ctx: Awaited<ReturnType<typeof requir
     refresh();
     return { ok: true };
   } catch (err) {
-    if (err instanceof InstallationChallanError) return { error: err.message };
+    // The return and material-challan rules speak in their own words (R2, R3).
+    if (err instanceof InstallationChallanError || err instanceof InstallationReturnError || err instanceof ComplaintError) return { error: err.message };
     console.error('[installation page] action failed', err);
     return { error: friendlyError(err) };
   }
@@ -185,6 +189,40 @@ export async function installTeamAction(id: string, assigneeIds: string[], prior
 }
 export async function installRemarkAction(id: string, text: string): Promise<ActionState> {
   return pageGuard(id, (ctx) => addInstallationRemark(ctx.scope, id, text, ctx.user.id));
+}
+
+/**
+ * N of a line are coming back unused (R2, 22 Oct 2026). A request, from the
+ * office as from the phone: stock moves when the store receives them.
+ */
+export async function installReturnAction(id: string, itemId: string, qty: number): Promise<ActionState> {
+  return pageGuard(id, (ctx) => requestInstallationReturn(ctx.scope, itemId, qty, ctx.user.id));
+}
+
+/** The store receives an installation's goods back - stock rights, like any receipt. */
+export async function installReceiveReturnAction(id: string, itemId: string): Promise<ActionState & { qty?: number }> {
+  let qty = 0;
+  const r = await pageGuard(id, async (ctx) => {
+    if (!ctx.permissions.has('stock.adjust')) throw new InstallationReturnError('Receiving goods back needs stock rights (Roles > Stock: Edit).');
+    qty = await receiveInstallationReturn(ctx.scope, itemId, ctx.user.id);
+  });
+  revalidatePath('/goods-dispatch/job-parts');
+  return r.error ? r : { ...r, qty };
+}
+
+/** A material challan for what is not on the order - cable, clamps (R3). Same approval as a complaint's. */
+export async function installRaiseChallanAction(id: string, input: { type: string; lines: { productId: string; qty: number }[]; note: string | null }): Promise<ActionState> {
+  return pageGuard(id, async (ctx) => { await raiseInstallationChallan(ctx.scope, id, input, ctx.user.id, 'office'); });
+}
+
+/** Change a material challan not yet approved (or rejected) - it goes for approval again (22 Oct 2026). */
+export async function installEditChallanAction(id: string, challanId: string, input: { type: string; lines: { productId: string; qty: number }[]; note: string | null }): Promise<ActionState> {
+  return pageGuard(id, async (ctx) => { await editJobChallan(ctx.scope, challanId, { installationChallanId: id }, input, ctx.user.id, 'office'); });
+}
+
+/** Take back a material challan nothing was issued on (22 Oct 2026). */
+export async function installWithdrawChallanAction(id: string, challanId: string, reason: string | null): Promise<ActionState> {
+  return pageGuard(id, async (ctx) => { await withdrawJobChallan(ctx.scope, challanId, { installationChallanId: id }, reason, ctx.user.id, 'office'); });
 }
 
 /**

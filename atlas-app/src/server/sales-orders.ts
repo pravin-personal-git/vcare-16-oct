@@ -455,7 +455,7 @@ export async function moveFulfilment(
       // (Rule 4). Without it the unit would say `with_customer` and name
       // nobody, which is the exact hole this work closes.
       partyId: true,
-      items: { select: { productId: true, productName: true, qty: true, dispatchedQty: true } },
+      items: { select: { productId: true, productName: true, qty: true, dispatchedQty: true, returnedQty: true } },
     },
   });
   if (!order) throw new Error('Order not found in your scope.');
@@ -519,7 +519,19 @@ export async function moveFulfilment(
     // Undoing THIS order's own dispatch, not a separate return document -
     // reverse the entry dispatch posted rather than guess a fresh figure
     // from today's cost data, which may have moved on since.
-    await reverseCogsMovement(scope, order.id, userId, `Order ${order.orderNo} returned`);
+    //
+    // Unless part of it already came back from an installation (R2, 22 Oct
+    // 2026): that part's cost came off when it was received, so reversing the
+    // whole dispatch would take it off twice. Then only what is still out.
+    const stillOut = order.items.filter((i) => i.productId && i.qty - i.returnedQty > 0);
+    if (order.items.some((i) => i.returnedQty > 0)) {
+      await postCogsMovement(scope, {
+        direction: 'in', entryDate: new Date(), description: `Order ${order.orderNo} returned`, sourceId: `${order.id}:returned`,
+        lines: stillOut.map((i) => ({ productId: i.productId as string, qty: i.qty - i.returnedQty })),
+      }, userId);
+    } else {
+      await reverseCogsMovement(scope, order.id, userId, `Order ${order.orderNo} returned`);
+    }
   }
 
   return db.$transaction(async (tx) => {
@@ -536,7 +548,9 @@ export async function moveFulfilment(
     });
 
     if (stockOut || stockBack) {
-      const lines = order.items.filter((i) => i.productId);
+      // A return brings back only what is still out - not what already came
+      // back from an installation (R2).
+      const lines = order.items.filter((i) => i.productId && (stockOut || i.qty - i.returnedQty > 0));
       const sign = stockOut ? -1 : 1;
 
       await applyMovements(
@@ -545,7 +559,7 @@ export async function moveFulfilment(
         userId,
         lines.map((i) => ({
           productId: i.productId as string,
-          qty: sign * i.qty,
+          qty: stockOut ? -i.qty : sign * (i.qty - i.returnedQty),
           reason: stockOut ? ('dispatch' as const) : ('return_in' as const),
           refType: 'SalesOrder',
           refId: order.id,
@@ -1090,7 +1104,7 @@ export async function cancelSalesOrder(
       amountPaidPaise: true, partyId: true,
       invoices: { select: { invoiceNo: true }, take: 1 },
       items: {
-        select: { productId: true, productName: true, dispatchedQty: true },
+        select: { productId: true, productName: true, dispatchedQty: true, returnedQty: true },
       },
     },
   });
@@ -1116,9 +1130,10 @@ export async function cancelSalesOrder(
     );
   }
 
-  const toReturn = order.items.filter((i) => i.productId && i.dispatchedQty > 0);
+  // What is still out: goods already back from an installation came back then (R2).
+  const toReturn = order.items.filter((i) => i.productId && i.dispatchedQty - i.returnedQty > 0);
 
-  return db.$transaction(async (tx) => {
+  const result = await db.$transaction(async (tx) => {
     const updated = await tx.salesOrder.updateMany({
       where: { id, storeId, fulfilmentStatus: { not: 'void' } },
       data: {
@@ -1135,7 +1150,7 @@ export async function cancelSalesOrder(
         userId,
         toReturn.map((i) => ({
           productId: i.productId!,
-          qty: i.dispatchedQty,
+          qty: i.dispatchedQty - i.returnedQty,
           reason: 'return_in' as const,
           refType: 'SalesOrder',
           refId: order.id,
@@ -1146,10 +1161,30 @@ export async function cancelSalesOrder(
         })),
       );
       await tx.salesOrderItem.updateMany({
-        where: { salesOrderId: id }, data: { dispatchedQty: 0 },
+        where: { salesOrderId: id }, data: { dispatchedQty: 0, returnedQty: 0 },
       });
     }
 
     return { orderNo: order.orderNo, returned: toReturn.length };
   });
+
+  /**
+   * The goods came back, so their cost comes off cost of goods sold too (22 Oct
+   * 2026 - found by the live-like returns test: a cancelled dispatched order put
+   * its stock back but kept its cost, so profit read low). The same rule as an
+   * order marked Returned: reverse the dispatch's own entry, or - when part
+   * already came back from an installation and its cost came off then - post
+   * only what was still out. Once the cancel itself has gone through.
+   */
+  if (toReturn.length > 0) {
+    if (order.items.some((i) => i.returnedQty > 0)) {
+      await postCogsMovement(scope, {
+        direction: 'in', entryDate: new Date(), description: `Order ${order.orderNo} cancelled`, sourceId: `${order.id}:cancelled`,
+        lines: toReturn.map((i) => ({ productId: i.productId as string, qty: i.dispatchedQty - i.returnedQty })),
+      }, userId);
+    } else {
+      await reverseCogsMovement(scope, order.id, userId, `Order ${order.orderNo} cancelled`);
+    }
+  }
+  return result;
 }

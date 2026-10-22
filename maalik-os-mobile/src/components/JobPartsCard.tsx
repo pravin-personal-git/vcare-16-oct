@@ -21,15 +21,26 @@ const STATUS: Record<string, { label: string; tone: PillTone }> = {
   approved: { label: 'Approved - collect from store', tone: 'brand' },
   rejected: { label: 'Rejected', tone: 'danger' },
   issued: { label: 'Issued', tone: 'success' },
+  withdrawn: { label: 'Withdrawn', tone: 'neutral' },
 };
+/** Until the store issues it (22 Oct 2026): changed while waiting or rejected, withdrawn until issued. */
+const EDITABLE = ['pending_approval', 'rejected'];
+const WITHDRAWABLE = ['pending_approval', 'rejected', 'approved'];
+type Challan = JobParts['challans'][number];
 const TYPES = [['material', 'Material'], ['replacement', 'Replacement'], ['installation', 'Installation']] as const;
 
-export function JobPartsCard({ parts, onSite, busy, send }: { parts: JobParts; onSite: boolean; busy: string | null; send: Send }) {
+export function JobPartsCard({ parts, onSite, busy, send, faultyParts = true }: {
+  parts: JobParts; onSite: boolean; busy: string | null; send: Send;
+  /** An installation's card has no faulty part to log - nothing was taken out (22 Oct 2026). */
+  faultyParts?: boolean;
+}) {
   const { t } = useT();
   const { c } = useTheme();
   const [mode, setMode] = useState<null | 'challan' | 'faulty'>(null);
   const [returning, setReturning] = useState<string | null>(null);
   const [n, setN] = useState('1');
+  const [editing, setEditing] = useState<Challan | null>(null);
+  const [withdrawing, setWithdrawing] = useState<string | null>(null);
 
   /**
    * The owner can hand challans to the office instead (F1a). Undefined means
@@ -51,7 +62,9 @@ export function JobPartsCard({ parts, onSite, busy, send }: { parts: JobParts; o
             <Pill label={t(STATUS[ch.status]?.label ?? ch.status)} tone={STATUS[ch.status]?.tone ?? 'neutral'} />
           </View>
           {ch.gdnNos.length > 0 && <Text variant="small" color={c.inkSoft}>{t('GDN')}: {ch.gdnNos.join(', ')}</Text>}
-          {ch.rejectionReason && <Text variant="small" color={c.danger}>{t(`Rejected: ${ch.rejectionReason}`)}</Text>}
+          {ch.rejectionReason && (ch.status === 'withdrawn'
+            ? <Text variant="small" color={c.inkSoft}>{t('Withdrawn')}: {ch.rejectionReason}</Text>
+            : <Text variant="small" color={c.danger}>{t(`Rejected: ${ch.rejectionReason}`)}</Text>)}
           {ch.lines.map((l) => (
             <View key={l.id} style={{ gap: 4 }}>
               <Text variant="small">{l.productName} × {l.qty}{l.qtyIssued > 0 ? ` · ${l.qtyIssued} ${t('issued')}, ${l.qtyReturned} ${t('returned')}, ${l.qtyIssued - l.qtyReturned} ${t('used')}` : ''}</Text>
@@ -70,6 +83,27 @@ export function JobPartsCard({ parts, onSite, busy, send }: { parts: JobParts; o
               ))}
             </View>
           ))}
+          {/* Mine and not issued: put it right (22 Oct 2026). An older server sends no `mine`, so nothing shows. */}
+          {ch.mine && WITHDRAWABLE.includes(ch.status) && !editing && (withdrawing === ch.id ? (
+            <View style={{ gap: space.sm }}>
+              <Text variant="small" color={c.inkSoft}>{t('Withdraw this challan? Nothing has left the store.')}</Text>
+              <View style={{ flexDirection: 'row', gap: space.sm }}>
+                <Button variant="secondary" icon="x" label={t('Withdraw')} loading={busy === `wd-${ch.id}`}
+                  onPress={() => void send(`wd-${ch.id}`, { op: 'withdraw_challan', challanId: ch.id }, 'Challan withdrawn.').then(() => setWithdrawing(null))} />
+                <Button variant="ghost" label={t('Keep it')} onPress={() => setWithdrawing(null)} />
+              </View>
+            </View>
+          ) : (
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: space.sm }}>
+              {EDITABLE.includes(ch.status) && (
+                <Button variant="ghost" icon="note" label={t(ch.status === 'rejected' ? 'Change and send again' : 'Change')} onPress={() => { setMode(null); setEditing(ch); }} />
+              )}
+              <Button variant="ghost" icon="x" label={t('Withdraw')} onPress={() => setWithdrawing(ch.id)} />
+            </View>
+          ))}
+          {editing?.id === ch.id && (
+            <ChallanForm busy={busy} send={send} onDone={() => setEditing(null)} replacement={faultyParts} editing={ch} />
+          )}
         </View>
       ))}
       {parts.faulty.map((f) => (
@@ -87,23 +121,31 @@ export function JobPartsCard({ parts, onSite, busy, send }: { parts: JobParts; o
               {t('Your office raises challans here. Tell them which parts you need.')}
             </Text>
           )}
-          <Button variant="secondary" icon="alert" label={t('Log faulty part')} onPress={() => setMode('faulty')} />
+          {faultyParts && <Button variant="secondary" icon="alert" label={t('Log faulty part')} onPress={() => setMode('faulty')} />}
         </View>
       )}
-      {mode === 'challan' && <ChallanForm busy={busy} send={send} onDone={() => setMode(null)} />}
+      {mode === 'challan' && <ChallanForm busy={busy} send={send} onDone={() => setMode(null)} replacement={faultyParts} />}
       {mode === 'faulty' && <FaultyForm busy={busy} send={send} onDone={() => setMode(null)} />}
     </Card>
   );
 }
 
-function ChallanForm({ busy, send, onDone }: { busy: string | null; send: Send; onDone: () => void }) {
+/**
+ * `replacement`: off on an installation - swapping a customer's unit is a complaint's job.
+ * `editing`: a challan already raised, opened with its lines to change and send again (22 Oct 2026).
+ */
+function ChallanForm({ busy, send, onDone, replacement = true, editing }: { busy: string | null; send: Send; onDone: () => void; replacement?: boolean; editing?: Challan }) {
   const { t } = useT();
   const { c } = useTheme();
-  const [type, setType] = useState<string>('material');
+  const [type, setType] = useState<string>(editing?.type ?? 'material');
   const [q, setQ] = useState('');
   const [hits, setHits] = useState<{ id: string; productCode: string; productName: string }[]>([]);
-  const [lines, setLines] = useState<{ productId: string; name: string; qty: string }[]>([]);
-  const [note, setNote] = useState('');
+  const [lines, setLines] = useState<{ productId: string; name: string; qty: string }[]>(
+    editing?.lines.filter((l) => l.productId).map((l) => ({ productId: l.productId as string, name: l.productName, qty: String(l.qty) })) ?? [],
+  );
+  const [note, setNote] = useState(editing?.note ?? '');
+  const key = editing ? `edit-${editing.id}` : 'raise_challan';
+  const body = { type, note, lines: lines.map((l) => ({ productId: l.productId, qty: Number(l.qty) })) };
   const [error, setError] = useState<string | null>(null);
 
   // Only the answer to what is typed NOW is shown - a slow answer for an
@@ -126,7 +168,7 @@ function ChallanForm({ busy, send, onDone }: { busy: string | null; send: Send; 
   return (
     <View style={{ gap: space.sm }}>
       <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: space.xs }}>
-        {TYPES.map(([k, label]) => (
+        {TYPES.filter(([k]) => replacement || k !== 'replacement').map(([k, label]) => (
           <Pressable key={k} accessibilityRole="button" onPress={() => setType(k)} style={chip(type === k)}><Text variant="small">{t(label)}</Text></Pressable>
         ))}
       </View>
@@ -146,9 +188,12 @@ function ChallanForm({ busy, send, onDone }: { busy: string | null; send: Send; 
         </View>
       ))}
       <Field label={t('Note')} value={note} onChangeText={setNote} multiline />
-      <Button icon="send" label={t('Send for approval')} loading={busy === 'raise_challan'}
+      {editing && <Text variant="small" color={c.inkSoft}>{t(`Changing ${editing.challanNo} - it goes for approval again.`)}</Text>}
+      <Button icon="send" label={t(editing ? 'Send for approval again' : 'Send for approval')} loading={busy === key}
         disabled={!lines.length || lines.some((l) => !(Number(l.qty) > 0))}
-        onPress={() => void send('raise_challan', { op: 'raise_challan', type, note, lines: lines.map((l) => ({ productId: l.productId, qty: Number(l.qty) })) }, 'Challan sent for approval - you will see when the store can issue it.').then(onDone)} />
+        onPress={() => void (editing
+          ? send(key, { op: 'edit_challan', challanId: editing.id, ...body }, 'Challan changed - sent for approval again.')
+          : send(key, { op: 'raise_challan', ...body }, 'Challan sent for approval - you will see when the store can issue it.')).then(onDone)} />
       <Button variant="ghost" label={t('Back')} onPress={onDone} />
     </View>
   );

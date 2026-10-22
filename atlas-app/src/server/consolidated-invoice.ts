@@ -109,7 +109,7 @@ export async function listBillableWork(scope: StoreScope): Promise<BillableCusto
           organizationName: true, grandTotalPaise: true, amountPaidPaise: true, isInvoiced: true,
         },
       },
-      items: { select: { qty: true } },
+      items: { select: { qty: true, qtyReturned: true } },
     },
   });
 
@@ -140,7 +140,8 @@ export async function listBillableWork(scope: StoreScope): Promise<BillableCusto
       salesOrderId: c.salesOrderId,
       orderNo: order.orderNo,
       itemCount: c.items.length,
-      totalQty: c.items.reduce((t, i) => t + i.qty, 0),
+      // What stays on site - goods back unused are not billed (R2).
+      totalQty: c.items.reduce((t, i) => t + i.qty - i.qtyReturned, 0),
     });
 
     const key = `${order.partyId}|${order.id}`;
@@ -267,7 +268,7 @@ export async function previewConsolidatedInvoice(
       id: true, challanNo: true, dispatchedAt: true, isInvoiced: true, salesOrderId: true,
       items: {
         orderBy: { srNo: 'asc' },
-        select: { id: true, productId: true, productName: true, qty: true, unit: true },
+        select: { id: true, productId: true, productName: true, qty: true, unit: true, qtyReturned: true, qtyReturnPending: true },
       },
     },
   });
@@ -277,6 +278,10 @@ export async function previewConsolidatedInvoice(
   }
   const billed = challans.find((c) => c.isInvoiced);
   if (billed) throw new Error(`Challan ${billed.challanNo} has already been billed.`);
+  // Goods said to be coming back are not settled yet: bill them once the store
+  // has them, or the bill guesses (R2, 22 Oct 2026).
+  const returning = challans.find((c) => c.items.some((i) => i.qtyReturnPending > 0));
+  if (returning) throw new Error(`Unused goods on ${returning.challanNo} are on their way back - receive them at the Parts counter first.`);
 
   // Every order that prices this work: the ones chosen explicitly, plus the one
   // behind each challan. A challan's own order is implied - you cannot bill its
@@ -355,8 +360,9 @@ export async function previewConsolidatedInvoice(
       challanNo: c.challanNo,
       dispatchedAt: c.dispatchedAt,
       salesOrderId: c.salesOrderId,
-      items: c.items.map((i) => ({
-        id: i.id, productId: i.productId, productName: i.productName, qty: i.qty, unit: i.unit,
+      // Only what stayed on site - goods back unused are not billed (D4).
+      items: c.items.filter((i) => i.qty - i.qtyReturned > 0).map((i) => ({
+        id: i.id, productId: i.productId, productName: i.productName, qty: i.qty - i.qtyReturned, unit: i.unit,
       })),
     })),
     orders.map((o) => ({

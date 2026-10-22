@@ -4,6 +4,8 @@ import { getInstallationPage } from '@/server/installation-page';
 import { listAttachments } from '@/server/attachments';
 import { documentTrail } from '@/server/document-trail';
 import { DocumentTrail } from '@/components/document/DocumentTrail';
+import { installationJobChallans } from '@/server/job-challans';
+import { catalogueOptions } from '@/server/form-options';
 import { InstallationView } from './InstallationView';
 
 /**
@@ -17,10 +19,14 @@ export default async function InstallationPage({ params }: { params: Promise<{ i
   const ctx = await requireContext();
   const data = await getInstallationPage(ctx.scope, id);
   if (!data) notFound();
-  const [files, trail] = await Promise.all([
+  const canEdit = ctx.permissions.has('installations.edit') && ctx.scope.kind === 'single';
+  const [files, trail, challans, catalogue] = await Promise.all([
     listAttachments(ctx.scope, 'installation_challan', id),
     // Its order, quotation, invoice and payments, both ways (G1, 11 Oct 2026).
     documentTrail(ctx.scope, 'installation', id),
+    // Cable, clamps - material not on the order (R3, 22 Oct 2026).
+    installationJobChallans(ctx.scope, id),
+    canEdit ? catalogueOptions(ctx.scope) : Promise.resolve([]),
   ]);
   return (
     <>
@@ -28,7 +34,12 @@ export default async function InstallationPage({ params }: { params: Promise<{ i
     <InstallationView
       data={data}
       files={files}
-      canEdit={ctx.permissions.has('installations.edit') && ctx.scope.kind === 'single'}
+      canEdit={canEdit}
+      parts={{
+        challans: challans.map((c) => ({ ...c, createdAt: c.createdAt.toISOString() })),
+        catalogue,
+        canIssue: ctx.permissions.has('stock.adjust'),
+      }}
     />
     </>
   );

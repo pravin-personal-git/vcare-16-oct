@@ -234,9 +234,12 @@ export async function convertOrderToInvoice(
     throw new Error('A cancelled or failed order cannot be invoiced.');
   }
   if (order.items.length === 0) throw new Error('This order has no line items.');
+  // Goods that came back unused from an installation are not billed (R2, 22 Oct 2026).
+  const items = order.items.map((i) => ({ ...i, qty: i.qty - i.returnedQty })).filter((i) => i.qty > 0);
+  if (items.length === 0) throw new Error('Everything on this order came back unused - there is nothing to bill.');
 
   const totals = computeTotals(
-    order.items.map((i) => ({
+    items.map((i) => ({
       qty: i.qty,
       unitPricePaise: i.unitPricePaise,
       discountPct: Number(i.discountPct),
@@ -302,7 +305,7 @@ export async function convertOrderToInvoice(
         notes: order.notes,
         createdBy: userId,
         items: {
-          create: order.items.map((i, n) => ({
+          create: items.map((i, n) => ({
             srNo: n + 1,
             productId: i.productId,
             productName: i.productName,
