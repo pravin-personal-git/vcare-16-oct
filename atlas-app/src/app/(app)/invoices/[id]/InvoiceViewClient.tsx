@@ -1,6 +1,7 @@
 'use client';
 
 import { CustomerLink } from '@/components/document/CustomerLink';
+import { SerialLinks } from '@/components/document/SerialLink';
 import { sayIfHeld } from '@/lib/held-message';
 import { WithFormOptions } from '@/components/document/WithFormOptions';
 import Link from 'next/link';
@@ -256,7 +257,7 @@ export function InvoiceViewClient({
                     <li key={it.srNo}>
                       <div className="flex justify-between gap-3"><span className="min-w-0">{it.productName} × {it.qty}</span><span className="shrink-0 font-mono">{formatCurrency(it.lineTotalPaise)}</span></div>
                       {it.serials.length > 0 && (
-                        <p className="break-all font-mono text-xs text-muted-foreground">S/N: {it.serials.join(', ')}</p>
+                        <p className="flex flex-wrap items-center gap-1 text-xs text-muted-foreground">S/N: <SerialLinks units={it.serials.map((serialNo) => ({ serialNo }))} /></p>
                       )}
                     </li>
                   ))}
