@@ -690,7 +690,8 @@ const DETAIL_INCLUDE = {
   salesOrder: { select: { orderNo: true } },
   unitsSold: {
     where: { deletedAt: null, serialNo: { not: null } },
-    select: { productId: true, serialNo: true },
+    // The name too: a job's bill matches its units by product name (22 Oct 2026).
+    select: { productId: true, serialNo: true, product: { select: { productName: true } } },
     orderBy: { serialNo: 'asc' },
   },
 } satisfies Prisma.InvoiceInclude;
@@ -828,7 +829,10 @@ function toDetail(i: DetailRow, name: Map<string, string>): InvoiceDetail {
     discountType: i.discountType,
     discountValue: i.discountValue,
     items: (() => {
-      const serials = serialsByLine(i.items.map((x) => ({ productId: x.productId, qty: Number(x.qty) })), i.unitsSold);
+      const serials = serialsByLine(
+        i.items.map((x) => ({ productId: x.productId, qty: Number(x.qty), productName: x.productName })),
+        i.unitsSold.map((u) => ({ productId: u.productId, serialNo: u.serialNo, productName: u.product.productName })),
+      );
       return i.items.map((x, n) => ({
         srNo: x.srNo, productId: x.productId,
         productName: x.productName, productCode: x.productCode,

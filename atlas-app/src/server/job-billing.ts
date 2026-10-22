@@ -175,6 +175,15 @@ export async function billJob(scope: StoreScope, complaintId: string, userId: st
     lines: draft.lines.map((l) => ({ productId: null, productName: l.description, productCode: l.productCode, hsnCode: l.hsnCode, qty: l.qty, unitPricePaise: l.unitPaise, discountPct: 0, taxRatePct: l.taxRatePct })),
   }, userId);
   await db.complaint.update({ where: { id: job.id }, data: { invoiceId: invoice.id, billingStatus: 'invoiced' } });
+  // The serial units this job fitted are sold on this bill (22 Oct 2026, Vcare):
+  // the bill's lines carry no product, so the unit says which bill it went on,
+  // and the bill, the warranty and Product History all show its serial.
+  const fitted = (await db.jobChallanLine.findMany({
+    where: { challan: { complaintId, status: 'issued' } }, select: { stockUnitIds: true },
+  })).flatMap((l) => l.stockUnitIds);
+  if (fitted.length) {
+    await db.stockUnit.updateMany({ where: { id: { in: fitted }, status: 'with_customer', invoiceId: null }, data: { invoiceId: invoice.id } });
+  }
   await logActivity(db, job.id, 'note', userId, { body: `Billed on ${invoice.invoiceNo} (draft - issue it from Invoices).` });
   return { id: invoice.id, invoiceNo: invoice.invoiceNo };
 }
