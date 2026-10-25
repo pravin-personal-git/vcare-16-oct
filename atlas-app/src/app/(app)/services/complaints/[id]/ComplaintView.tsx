@@ -18,7 +18,7 @@ import { Icon } from '@/components/ui/Icon';
 import type { SplitCover } from '@/lib/amc-coverage';
 import type { ComplaintDetail } from '@/server/complaints';
 import {
-  addComplaintNoteAction, assignTechnicianAction, setResolutionTypeAction, updateComplaintStatusAction, rescheduleVisitAction, cancelVisitAction,
+  addComplaintNoteAction, assignTechnicianAction, setResolutionTypeAction, updateComplaintStatusAction, rescheduleVisitAction, cancelVisitAction, completeVisitAction,
   logFaultyPartAction, raiseJobChallanAction, addComplaintItemAction, cancelComplaintItemAction, requestWarrantyVoidAction, pickUpItemsAction, handBackItemsAction,
 } from '../../actions';
 import type { ComplaintItemView } from '@/server/complaint-items';
@@ -28,7 +28,7 @@ import { Modal } from '@/components/ui/Modal';
 import { TechnicianOptions } from '@/components/services/TechnicianOptions';
 import { JOB_STATUSES, OFFICE_LABEL, officeStatusOptions, statusTone } from '@/lib/job-flow';
 import { classifyActivity, type ActivityAuthor } from '@/lib/complaint-activity';
-import { ReasonDialog, VisitChangeDialog, VisitTrail, needsReason } from './JobControls';
+import { CompleteVisitDialog, ReasonDialog, VisitChangeDialog, VisitTrail, needsReason } from './JobControls';
 import { JobParts, LogFaulty, RaiseChallan, type ChallanVM, type FaultyVM } from './JobParts';
 import type { FindableProduct } from '@/components/document/ProductFinder';
 import { CustomerSide, type EstimateSeedLine } from './CustomerSide';
@@ -113,7 +113,7 @@ const rupees = (p: number) => `₹${(p / 100).toLocaleString('en-IN', { maximumF
 
 export function ComplaintView({ detail: d, coverage, technicians, legacyTechnicianName, canEdit, calls = [], parts, estimateSeed = [], closeNeedsApproval = false, canBill = false, trail = [], photos = [], sale = null, items = [], handBack = [], bill = null }: {
   /** What Bill this job would bill (stage 7). */
-  bill?: { lines: import('@/lib/job-bill').BillLine[]; basePaise: number; withGstPaise: number; fromEstimate: boolean } | null;
+  bill?: { lines: import('@/lib/job-bill').BillLine[]; basePaise: number; withGstPaise: number; fromEstimate: boolean; fromOffice?: boolean } | null;
   /** The items on the job (10 Oct 2026, stage 2), each with its own cover. */
   items?: ItemVM[];
   /** Items ready to go back to the customer, with stock that could stand in for a kept one (stage 6). */
@@ -149,6 +149,7 @@ export function ComplaintView({ detail: d, coverage, technicians, legacyTechnici
   const [error, setError] = useState<string | null>(null);
   const [askReason, setAskReason] = useState<{ to: string; title: string } | null>(null);
   const [visitEdit, setVisitEdit] = useState<{ id: string; mode: 'move' | 'cancel'; scheduledAt: string } | null>(null);
+  const [visitDone, setVisitDone] = useState<{ id: string; checkedIn: boolean } | null>(null);
   const [raising, setRaising] = useState(false);
   const [logging, setLogging] = useState(false);
   const [adding, setAdding] = useState(false);
@@ -268,6 +269,13 @@ export function ComplaintView({ detail: d, coverage, technicians, legacyTechnici
           onConfirm={({ newAt, reason }) => {
             const v = visitEdit; setVisitEdit(null);
             run(() => (v.mode === 'move' && newAt ? rescheduleVisitAction(v.id, newAt, reason) : cancelVisitAction(v.id, reason)));
+          }} />
+      )}
+      {visitDone && (
+        <CompleteVisitDialog checkedIn={visitDone.checkedIn} busy={pending} onClose={() => setVisitDone(null)}
+          onConfirm={({ outcome, override }) => {
+            const v = visitDone; setVisitDone(null);
+            run(async () => { const r = await completeVisitAction(v.id, outcome, override); if (!r.error) setNotice('Visit marked completed.'); return r; });
           }} />
       )}
       {raising && parts && <RaiseChallan catalogue={parts.catalogue} busy={pending} onClose={() => setRaising(false)}
@@ -502,7 +510,8 @@ export function ComplaintView({ detail: d, coverage, technicians, legacyTechnici
                   </p>
                   <VisitTrail changes={v.changes} fmt={fmt} />
                   {canEdit && v.status === 'scheduled' && (
-                    <span className="mt-1.5 flex gap-3 text-xs">
+                    <span className="mt-1.5 flex flex-wrap gap-3 text-xs">
+                      <button type="button" className="font-medium text-success hover:underline" onClick={() => setVisitDone({ id: v.id, checkedIn: v.purpose !== 'field_visit' || !!v.checkedInAt })}>Mark completed</button>
                       <button type="button" className="font-medium text-brand hover:underline" onClick={() => setVisitEdit({ id: v.id, mode: 'move', scheduledAt: v.scheduledAt })}>Change time</button>
                       <button type="button" className="font-medium text-danger hover:underline" onClick={() => setVisitEdit({ id: v.id, mode: 'cancel', scheduledAt: v.scheduledAt })}>Cancel visit</button>
                     </span>

@@ -35,6 +35,40 @@ export function ReasonDialog({ title, busy, onClose, onConfirm }: {
   );
 }
 
+/**
+ * The office marks a visit done from the complaint page (25 Oct 2026, Vcare).
+ * A field visit never checked in on the phone needs a reason, kept on the job.
+ */
+export function CompleteVisitDialog({ checkedIn, busy, onClose, onConfirm }: {
+  checkedIn: boolean; busy: boolean; onClose: () => void;
+  onConfirm: (input: { outcome: string; override: string | null }) => void;
+}) {
+  const [outcome, setOutcome] = useState('');
+  const [why, setWhy] = useState('');
+  const ready = checkedIn || why.trim();
+  return (
+    <Modal title="Mark visit completed" icon="check" size="md" onClose={onClose}
+      footer={<>
+        <Button onClick={onClose}>Back</Button>
+        <Button variant="primary" loading={busy} disabled={!ready}
+          onClick={() => onConfirm({ outcome: outcome.trim(), override: checkedIn ? null : why.trim() })}>Mark completed</Button>
+      </>}>
+      <div className="grid gap-3">
+        <Field label="What was done (the customer sees it)" htmlFor="visit-outcome">
+          <textarea id="visit-outcome" autoFocus rows={2} value={outcome} onChange={(e) => setOutcome(e.target.value)} className="field-input"
+            placeholder="Camera angle fixed, DVR restarted…" />
+        </Field>
+        {!checkedIn && (
+          <Field label="The technician did not check in at the site - why mark it done? (staff only)" required htmlFor="visit-why">
+            <textarea id="visit-why" rows={2} value={why} onChange={(e) => setWhy(e.target.value)} className="field-input"
+              placeholder="Phone had no network at the site / customer confirmed on call…" />
+          </Field>
+        )}
+      </div>
+    </Modal>
+  );
+}
+
 const toLocalInput = (iso: string) => {
   // datetime-local wants local wall-clock time; the office works in India time.
   const d = new Date(iso);

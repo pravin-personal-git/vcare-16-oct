@@ -250,7 +250,17 @@ export function RaiseChallan({ catalogue, busy, onClose, onSave, installation = 
   // A line already on the challan keeps its name even if the catalogue here no longer lists it.
   const name = (id: string) => catalogue.find((p) => p.id === id)?.name ?? initial?.lines.find((l) => l.productId === id)?.name ?? id;
   const isSerial = (id: string) => !!catalogue.find((p) => p.id === id)?.serial;
-  const setLineQty = (id: string, n: number) => setLines(lines.map((l) => (l.productId === id ? { ...l, qty: n } : l)));
+  /**
+   * A serial line's quantity changed in the list (25 Oct 2026, Vcare): 2 of a
+   * product are 2 serials, so its serials open to pick the rest. Lowering the
+   * quantity keeps the first serials it still needs.
+   */
+  const [serialsOf, setSerialsOf] = useState<string | null>(null);
+  const setLineQty = (id: string, n: number) => {
+    setLines(lines.map((l) => (l.productId === id ? { ...l, qty: n, units: n > 0 && l.units.length > n ? l.units.slice(0, n) : l.units } : l)));
+    if (isSerial(id) && n > 0) setSerialsOf(id);
+  };
+  const setLineUnits = (id: string, units: Unit[]) => setLines(lines.map((l) => (l.productId === id ? { ...l, units } : l)));
   const unitsOk = (l: { qty: number; units: Unit[] }) => l.units.length === 0 || l.units.length === l.qty;
   const valid = lines.length > 0 && lines.every((l) => l.qty > 0 && unitsOk(l));
   const choose = (id: string) => { setPick(id); setPickUnits([]); };
@@ -290,11 +300,21 @@ export function RaiseChallan({ catalogue, busy, onClose, onSave, installation = 
                     onChange={(e) => setLineQty(l.productId, Number(e.target.value))} className="field-input h-8 w-20" />
                   <button type="button" className="text-xs text-danger" onClick={() => setLines(lines.filter((x) => x.productId !== l.productId))}>Remove</button>
                 </span>
-                {l.units.length > 0 && (
+                {serialsOf !== l.productId && (l.units.length > 0 || isSerial(l.productId)) && (
                   <span className="flex flex-wrap items-center gap-1">
                     {l.units.map((u) => <span key={u.id} className="rounded border border-warning/40 bg-warning/10 px-1.5 font-mono text-xs text-warning">{u.serialNo}</span>)}
-                    <button type="button" className="text-xs text-muted-foreground hover:underline" onClick={() => setLines(lines.map((x) => (x.productId === l.productId ? { ...x, units: [] } : x)))}>clear</button>
+                    {isSerial(l.productId) && (
+                      <button type="button" className="text-xs font-medium text-brand hover:underline" onClick={() => setSerialsOf(l.productId)}>{l.units.length ? 'change serials' : 'pick serials'}</button>
+                    )}
+                    {l.units.length > 0 && <button type="button" className="text-xs text-muted-foreground hover:underline" onClick={() => setLineUnits(l.productId, [])}>clear</button>}
                   </span>
+                )}
+                {serialsOf === l.productId && (
+                  <div className="grid gap-1">
+                    <span className="text-xs text-muted-foreground">Pick {l.qty} serial{l.qty === 1 ? '' : 's'}, or none and the store picks.</span>
+                    <ShelfUnits productId={l.productId} need={l.qty} value={l.units} onChange={(u) => setLineUnits(l.productId, u)} />
+                    <button type="button" className="justify-self-start text-xs font-medium text-brand hover:underline" onClick={() => setSerialsOf(null)}>Done</button>
+                  </div>
                 )}
                 {!unitsOk(l) && <span className="text-xs text-danger">{l.units.length} serial{l.units.length === 1 ? '' : 's'} for {l.qty} - match the quantity, or clear them.</span>}
               </li>

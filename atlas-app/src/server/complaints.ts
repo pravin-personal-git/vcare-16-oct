@@ -937,7 +937,15 @@ export async function cancelVisit(scope: StoreScope, visitId: string, reason: st
   if (visit.complaintId) await jobEvent(visit.complaintId, 'visit_changed', `cancelled (${why})`);
 }
 
-export async function completeVisit(scope: StoreScope, visitId: string, outcomeNote: string, userId: string | null) {
+export async function completeVisit(
+  scope: StoreScope, visitId: string, outcomeNote: string, userId: string | null,
+  /**
+   * The office marks a visit done from the complaint page (25 Oct 2026,
+   * Vcare) when the technician did the work but never checked in on the
+   * phone. Allowed only with a reason, which stays on the job.
+   */
+  officeOverride?: string | null,
+) {
   scopeForWrite(scope);
   const visit = await db.serviceVisit.findFirst({
     // Either leg: a visit carries its own store now, and the complaint route
@@ -945,14 +953,19 @@ export async function completeVisit(scope: StoreScope, visitId: string, outcomeN
     where: { id: visitId, OR: [scopeWhere(scope), { complaint: scopeWhere(scope) }] },
   });
   if (!visit) throw new ComplaintError('That visit is not in your scope.');
+  // Done twice (a phone replaying its queue) is done once; a cancelled visit stays cancelled.
+  if (visit.status === 'completed') return;
+  if (visit.status === 'cancelled') throw new ComplaintError('This visit was cancelled. Schedule a new one instead.');
 
   // A field visit exists to fix something in person - it cannot be marked
   // done until the check-in below has proven the technician was actually
   // there. An info-collection call has nothing to check in against and is
   // unaffected.
-  if (visit.purpose === 'field_visit' && !visit.checkedInAt) {
+  const override = officeOverride?.trim() || null;
+  if (visit.purpose === 'field_visit' && !visit.checkedInAt && !override) {
     throw new ComplaintError('Check in at the site before marking this visit completed.');
   }
+  const noCheckIn = visit.purpose === 'field_visit' && !visit.checkedInAt;
 
   /**
    * WHICH CONTRACT, IF ANY, THIS VISIT DRAWS FROM.
@@ -1007,6 +1020,9 @@ export async function completeVisit(scope: StoreScope, visitId: string, outcomeN
     // record is the challan's.
     if (visit.complaintId) {
       await logActivity(tx, visit.complaintId, 'visit_completed', userId, { body: outcomeNote.trim() || 'Visit completed.', visibleToPortal: true });
+      if (noCheckIn) {
+        await logActivity(tx, visit.complaintId, 'note', userId, { body: `Visit marked completed from the office without a check-in. Reason: ${override}` });
+      }
     }
   });
 }

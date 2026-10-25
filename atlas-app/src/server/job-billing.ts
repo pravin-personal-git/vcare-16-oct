@@ -65,6 +65,8 @@ export async function syncEstimateToUsed(complaintId: string, userId: string | n
 export interface JobBillDraft {
   lines: BillLine[];
   fromEstimate: boolean;
+  /** The lines are the office's own (Change the bill), not the customer's approved estimate. */
+  fromOffice: boolean;
   /** Before GST / with GST. */
   basePaise: number;
   withGstPaise: number;
@@ -79,11 +81,12 @@ export async function jobBillDraft(
     where: { id: complaintId, ...scopeWhere(scope) },
     select: {
       id: true, storeId: true, customerId: true, productId: true, createdAt: true,
-      estimates: { where: { status: 'approved' }, orderBy: { createdAt: 'desc' }, take: 1, select: { lines: true } },
+      estimates: { where: { status: 'approved' }, orderBy: { createdAt: 'desc' }, take: 1, select: { lines: true, decidedVia: true } },
       visits: { where: { status: { not: 'cancelled' } }, select: { id: true } },
     },
   });
   if (!job) return null;
+  const fromOffice = job.estimates[0]?.decidedVia === 'office';
   const used = await usedParts(job.id);
   // Units handed over from our stock in place of ones the supplier kept, when
   // the customer pays for them (their cost went to parts consumed, stage 6).
@@ -99,7 +102,7 @@ export async function jobBillDraft(
   const asLine = (productId: string, qty: number): BillLine | null => {
     const p = products.get(productId);
     if (!p || qty <= 0) return null;
-    return { description: p.productName, productCode: p.productCode, hsnCode: p.hsnCode, qty, unitPaise: p.prices[0]?.dlpPaise ?? 0, taxRatePct: p.prices[0] ? Number(p.prices[0].taxRatePct) : 18 };
+    return { description: p.productName, productCode: p.productCode, hsnCode: p.hsnCode, qty, unitPaise: p.prices[0]?.dlpPaise ?? 0, taxRatePct: p.prices[0] ? Number(p.prices[0].taxRatePct) : 18, productId };
   };
 
   let lines: BillLine[];
@@ -109,7 +112,7 @@ export async function jobBillDraft(
       const qty = l.productId && used.has(l.productId) ? Math.min(l.qty, used.get(l.productId)!) : l.qty;
       if (qty <= 0) return [];
       const p = l.productId ? products.get(l.productId) : undefined;
-      return [{ description: l.description, productCode: p?.productCode ?? null, hsnCode: p?.hsnCode ?? null, qty, unitPaise: l.unitPaise, taxRatePct: l.taxRatePct ?? 18 }];
+      return [{ description: l.description, productCode: p?.productCode ?? null, hsnCode: p?.hsnCode ?? null, qty, unitPaise: l.unitPaise, taxRatePct: l.taxRatePct ?? 18, productId: l.productId ?? null }];
     });
   } else {
     const { resolveSplitCoverFor } = await import('./amc');
@@ -133,10 +136,52 @@ export async function jobBillDraft(
         supplierQuotePaise: i.rma?.supplierQuotePaise ?? null, courierSharePaise: i.rma?.courierSharePaise ?? 0,
       })),
       parts: partsFree ? [] : [...used].flatMap(([pid, qty]) => asLine(pid, qty) ?? []),
-      fromStock: stockLines.flatMap((l) => asLine(l.productId, l.qtyIssued) ?? []),
+      // Not a part used on the job, so it is not cut to the parts used if the office changes the bill.
+      fromStock: stockLines.flatMap((l) => { const x = asLine(l.productId, l.qtyIssued); return x ? [{ ...x, productId: null }] : []; }),
     });
   }
-  return { lines, fromEstimate: !!est, ...billTotals(lines) };
+  return { lines, fromEstimate: !!est, fromOffice, ...billTotals(lines) };
+}
+
+/**
+ * THE OFFICE CHANGES THE BILL (25 Oct 2026, Vcare): add a charge of its own
+ * choosing - a service charge for a visit - change a price, or take a line
+ * off, on the spot and without asking the customer. Kept as an estimate the
+ * office approved (`decidedVia: 'office'`), so Bill this job, the close gate
+ * and the preview all read it the way they read a customer's approval, and
+ * part lines still drop to what was used if parts come back.
+ */
+export async function setJobBill(scope: StoreScope, complaintId: string, lines: EstimateLine[], userId: string): Promise<void> {
+  const storeId = scopeForWrite(scope);
+  const job = await db.complaint.findFirst({ where: { id: complaintId, ...scopeWhere(scope) }, select: { id: true, invoiceId: true, status: true } });
+  if (!job) throw new ComplaintError('That job is not in your scope.');
+  if (job.invoiceId) throw new ComplaintError('This job is already billed - change the invoice itself while it is a draft.');
+  // A job waiting on the customer's estimate goes back to work: the office has decided the price.
+  const resume = job.status === 'awaiting_estimate';
+  const ids = [...new Set(lines.map((l) => l.productId).filter((x): x is string => !!x))];
+  const ours = new Set((ids.length ? await db.product.findMany({ where: { id: { in: ids }, storeId }, select: { id: true } }) : []).map((p) => p.id));
+  const clean: EstimateLine[] = lines
+    .map((l) => ({
+      description: String(l.description ?? '').trim().slice(0, 200), qty: Math.max(1, Math.trunc(Number(l.qty) || 1)),
+      unitPaise: Math.max(0, Math.round(Number(l.unitPaise) || 0)),
+      productId: l.productId && ours.has(l.productId) ? l.productId : null,
+      taxRatePct: Math.min(28, Math.max(0, Number(l.taxRatePct ?? 18) || 0)),
+    }))
+    .filter((l) => l.description && l.unitPaise > 0);
+  if (!clean.length) throw new ComplaintError('Keep at least one line with a price. To charge nothing, use Don\'t bill.');
+  const total = estimateTotal(clean);
+  await db.$transaction(async (tx) => {
+    // A waiting estimate is overtaken by what the office has now set.
+    await tx.jobEstimate.updateMany({ where: { complaintId, status: 'waiting' }, data: { status: 'withdrawn' } });
+    await tx.jobEstimate.create({
+      data: { storeId, complaintId, lines: clean as unknown as object[], totalPaise: total, note: 'Bill set by the office.', status: 'approved', decidedVia: 'office', decidedAt: new Date(), createdBy: userId },
+    });
+    await tx.complaint.update({ where: { id: complaintId }, data: { billingStatus: 'to_invoice', ...(resume ? { status: 'in_progress' } : {}) } });
+    await logActivity(tx, complaintId, 'note', userId, {
+      body: `Bill changed by the office: ${clean.map((l) => `${l.description} ${l.qty} × ₹${(l.unitPaise / 100).toLocaleString('en-IN')}`).join(', ')}. Total ₹${(total / 100).toLocaleString('en-IN')} with GST.`,
+      ...(resume ? { statusFrom: 'awaiting_estimate', statusTo: 'in_progress' } : {}),
+    });
+  });
 }
 
 /**
@@ -171,7 +216,7 @@ export async function billJob(scope: StoreScope, complaintId: string, userId: st
     billingAddress: cu.addressLine1, shippingAddress: cu.addressLine1, stateId: cu.state, cityId: cu.city,
     invoiceDate: new Date(), termsDays: cu.paymentTermsDays ?? 0, poNumber: null,
     deliveryCharge: 0, deliveryExempt: true, discountType: 'amount', discountValue: 0, termsBody: null,
-    notes: `Field job ${job.complaintNo}.${draft.fromEstimate ? ' As per the approved estimate; parts at the quantity actually used.' : ' Visits by the AMC, parts and repairs by each item\'s warranty.'}`,
+    notes: `Field job ${job.complaintNo}.${draft.fromOffice ? ' Charges as set by the office; parts at the quantity actually used.' : draft.fromEstimate ? ' As per the approved estimate; parts at the quantity actually used.' : ' Visits by the AMC, parts and repairs by each item\'s warranty.'}`,
     lines: draft.lines.map((l) => ({ productId: null, productName: l.description, productCode: l.productCode, hsnCode: l.hsnCode, qty: l.qty, unitPricePaise: l.unitPaise, discountPct: 0, taxRatePct: l.taxRatePct })),
   }, userId);
   await db.complaint.update({ where: { id: job.id }, data: { invoiceId: invoice.id, billingStatus: 'invoiced' } });

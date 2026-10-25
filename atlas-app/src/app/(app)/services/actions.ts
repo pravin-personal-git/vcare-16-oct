@@ -15,7 +15,7 @@ import { resolveCoverageFor } from '@/server/amc';
 import { friendlyError } from '@/lib/friendly-error';
 import { cancelJobIssue, correctJobIssue, editJobChallan, issueJobChallan, serialChoices, logFaultyPart, raiseJobChallan, receiveFaultyPart, receiveReturnedParts, requestPartsReturn, returnUnusedParts, swapIssuedUnit, unitsOnShelf, withdrawJobChallan, type ChallanLineInput } from '@/server/job-challans';
 import { customerLinkToken, sendEstimate, type EstimateLine } from '@/server/job-customer';
-import { billJob, waiveJobBilling } from '@/server/job-billing';
+import { billJob, setJobBill, waiveJobBilling } from '@/server/job-billing';
 import { addComplaintItem, cancelComplaintItem, listCustomerEquipment, pickUpItems, requestWarrantyVoid, type ComplaintItemInput } from '@/server/complaint-items';
 import { createInstallationJob, installationSetup, type InstallationSetup } from '@/server/installation-jobs';
 import { istWallClock } from '@/lib/date-ranges';
@@ -279,10 +279,11 @@ export async function scheduleVisitAction(
   });
 }
 
-export async function completeVisitAction(visitId: string, outcomeNote: string): Promise<ActionState> {
+/** `officeOverride`: why the office marks a field visit done that was never checked in. */
+export async function completeVisitAction(visitId: string, outcomeNote: string, officeOverride?: string | null): Promise<ActionState> {
   return guard(async () => {
     const ctx = await requireContext();
-    await completeVisit(ctx.scope, visitId, outcomeNote, ctx.user.id);
+    await completeVisit(ctx.scope, visitId, outcomeNote, ctx.user.id, officeOverride);
   });
 }
 
@@ -517,6 +518,19 @@ export async function billJobAction(complaintId: string): Promise<ActionState & 
     const r = await billJob(ctx.scope, complaintId, ctx.user.id);
     refresh();
     return { ok: true, invoiceId: r.id, invoiceNo: r.invoiceNo };
+  } catch (e) {
+    return { error: friendlyError(e, e instanceof ComplaintError) };
+  }
+}
+
+/** The office sets the job's charges itself - add a service charge, change or take off a line (25 Oct 2026). */
+export async function setJobBillAction(complaintId: string, lines: EstimateLine[]): Promise<ActionState> {
+  try {
+    const ctx = await requireContext();
+    if (!ctx.permissions.has('invoice.create')) return { error: 'Changing the bill needs invoice rights (Roles > Invoices & receipts: Edit).' };
+    await setJobBill(ctx.scope, complaintId, lines, ctx.user.id);
+    refresh();
+    return { ok: true };
   } catch (e) {
     return { error: friendlyError(e, e instanceof ComplaintError) };
   }

@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/Button';
 import { Modal } from '@/components/ui/Modal';
 import { ProductFinder, type FindableProduct } from '@/components/document/ProductFinder';
 import Link from 'next/link';
-import { billJobAction, customerLinkAction, sendEstimateAction, waiveBillingAction } from '../../actions';
+import { billJobAction, customerLinkAction, sendEstimateAction, setJobBillAction, waiveBillingAction } from '../../actions';
 import type { BillLine } from '@/lib/job-bill';
 
 /**
@@ -21,7 +21,7 @@ export interface EstimateSeedLine { description: string; qty: number; unitPaise:
 
 export function CustomerSide({ complaintId, complaintNo, canEdit, canEstimate, seed, waitingEstimatePaise, rating, catalogue = [], invoice = null, billingStatus = 'not_billable', canBill = false, finished = false, bill = null }: {
   /** What Bill this job would put on the invoice (stage 7): from the switches, or the approved estimate. */
-  bill?: { lines: BillLine[]; basePaise: number; withGstPaise: number; fromEstimate: boolean } | null;
+  bill?: { lines: BillLine[]; basePaise: number; withGstPaise: number; fromEstimate: boolean; fromOffice?: boolean } | null;
   complaintId: string; complaintNo: string; canEdit: boolean; canEstimate: boolean;
   /** Bill this job: the job's invoice, where billing stands, and whether this person may bill. */
   invoice?: { id: string; invoiceNo: string; lifecycle: string } | null; billingStatus?: string; canBill?: boolean; finished?: boolean;
@@ -35,6 +35,7 @@ export function CustomerSide({ complaintId, complaintNo, canEdit, canEstimate, s
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [estimating, setEstimating] = useState(false);
+  const [billing, setBilling] = useState(false);
   const [waiving, setWaiving] = useState(false);
   const [waiveWhy, setWaiveWhy] = useState('');
   const chargeable = !invoice && billingStatus !== 'waived' && !!bill && bill.lines.length > 0;
@@ -68,6 +69,8 @@ export function CustomerSide({ complaintId, complaintNo, canEdit, canEstimate, s
         <div className="mt-3 flex flex-wrap gap-2">
           <Button size="sm" icon="send" loading={pending && !link} onClick={getLink}>Customer link</Button>
           {canEstimate && <Button size="sm" icon="receipt" onClick={() => setEstimating(true)}>Send estimate</Button>}
+          {/* Nothing to bill yet: the office can still charge the visit (25 Oct 2026). */}
+          {!invoice && canBill && !chargeable && <Button size="sm" icon="plus" onClick={() => { setError(null); setBilling(true); }}>Add a charge</Button>}
           {canBill && chargeable && (billingStatus === 'to_invoice' || finished) && (
             <Button size="sm" onClick={() => { setError(null); setWaiving(true); }}>Don&apos;t bill</Button>
           )}
@@ -84,10 +87,13 @@ export function CustomerSide({ complaintId, complaintNo, canEdit, canEstimate, s
       {invoice && (
         <p className="mt-2 text-sm">Billed on <Link href={`/invoices/${invoice.id}`} className="font-mono font-medium text-brand hover:underline">{invoice.invoiceNo}</Link> <span className="text-muted-foreground">({invoice.lifecycle === 'draft' ? 'draft - issue it to post it to accounts' : invoice.lifecycle})</span></p>
       )}
-      {!invoice && billingStatus === 'to_invoice' && <p className="mt-2 text-xs text-muted-foreground">Estimate approved - ready to bill (parts at the quantity actually used).</p>}
+      {!invoice && billingStatus === 'to_invoice' && <p className="mt-2 text-xs text-muted-foreground">{bill?.fromOffice ? 'Charges set by the office' : 'Estimate approved'} - ready to bill (parts at the quantity actually used).</p>}
       {chargeable && bill && (
         <div className="mt-3 rounded-lg border border-border px-3 py-2">
-          <p className="text-micro font-semibold uppercase tracking-wide text-muted-foreground">{bill.fromEstimate ? 'To bill - the approved estimate' : 'To bill - from the switches'}</p>
+          <p className="flex items-baseline justify-between gap-2 text-micro font-semibold uppercase tracking-wide text-muted-foreground">
+            <span>{bill.fromOffice ? 'To bill - set by the office' : bill.fromEstimate ? 'To bill - the approved estimate' : 'To bill - from the switches'}</span>
+            {canBill && <button type="button" className="text-xs font-medium normal-case tracking-normal text-brand hover:underline" onClick={() => { setError(null); setBilling(true); }}>Change</button>}
+          </p>
           <ul className="mt-1 divide-y divide-border text-sm">
             {bill.lines.map((l, n) => (
               <li key={n} className="flex items-baseline justify-between gap-3 py-1">
@@ -132,19 +138,35 @@ export function CustomerSide({ complaintId, complaintNo, canEdit, canEstimate, s
             router.refresh();
           })} />
       )}
+      {billing && (
+        <EstimateDialog mode="bill" seed={chargeable && bill ? bill.lines : [{ description: 'Service charge', qty: 1, unitPaise: 0, taxRatePct: 18 }]}
+          catalogue={catalogue} busy={pending} onClose={() => setBilling(false)}
+          onSend={(lines) => start(async () => {
+            setError(null);
+            const r = await setJobBillAction(complaintId, lines);
+            if (r.error) setError(r.error); else setBilling(false);
+            router.refresh();
+          })} />
+      )}
     </section>
   );
 }
 
-function EstimateDialog({ seed, catalogue, busy, onClose, onSend }: {
+/**
+ * `mode="bill"` (25 Oct 2026, Vcare): the same lines, but the office sets the
+ * job's charges itself - no customer approval, no note to the customer.
+ */
+function EstimateDialog({ mode = 'estimate', seed, catalogue, busy, onClose, onSend }: {
+  mode?: 'estimate' | 'bill';
   seed: EstimateSeedLine[]; catalogue: FindableProduct[]; busy: boolean; onClose: () => void; onSend: (lines: EstimateSeedLine[], note: string | null) => void;
 }) {
+  const asBill = mode === 'bill';
   // Products come from the search box (like quotations) at the selling price
   // (DLP); labour, visit and other costs are free-text lines. Every line has
   // its GST, so the customer approves what they will be billed (28 Sep 2026).
   type Row = { description: string; qty: string; rupees: string; gst: string; productId: string | null };
   const [lines, setLines] = useState<Row[]>(
-    seed.map((l) => ({ description: l.description, qty: String(l.qty), rupees: String(Math.round(l.unitPaise / 100)), gst: String(l.taxRatePct ?? 18), productId: l.productId ?? null })),
+    seed.map((l) => ({ description: l.description, qty: String(l.qty), rupees: String(asBill ? l.unitPaise / 100 : Math.round(l.unitPaise / 100)), gst: String(l.taxRatePct ?? 18), productId: l.productId ?? null })),
   );
   const [pick, setPick] = useState('');
   const [note, setNote] = useState('');
@@ -161,12 +183,14 @@ function EstimateDialog({ seed, catalogue, busy, onClose, onSend }: {
     setPick('');
   };
   return (
-    <Modal title="Send estimate to the customer" icon="receipt" size="lg" onClose={onClose}
-      footer={<><Button onClick={onClose}>Cancel</Button><Button variant="primary" loading={busy} disabled={!lines.some((l) => l.description.trim())}
+    <Modal title={asBill ? 'Change the bill' : 'Send estimate to the customer'} icon="receipt" size="lg" onClose={onClose}
+      footer={<><Button onClick={onClose}>Cancel</Button><Button variant="primary" loading={busy} disabled={!lines.some((l) => l.description.trim() && (!asBill || net(l) > 0))}
         onClick={() => onSend(lines.filter((l) => l.description.trim()).map((l) => ({ description: l.description.trim(), qty: Number(l.qty) || 1, unitPaise: Math.round((Number(l.rupees) || 0) * 100), productId: l.productId, taxRatePct: Number(l.gst) || 0 })), note.trim() || null)}>
-        Send (₹{total.toLocaleString('en-IN')} incl. GST)</Button></>}>
+        {asBill ? 'Save bill' : 'Send'} (₹{total.toLocaleString('en-IN')} incl. GST)</Button></>}>
       <div className="grid gap-3">
-        <p className="text-xs text-muted-foreground">Prefilled from the visit charge and the parts on this job&apos;s challans at the selling price, quantity = what was used. Change anything. The job waits until the customer approves; if parts come back later, a waiting estimate drops to what was used.</p>
+        <p className="text-xs text-muted-foreground">{asBill
+          ? 'Add a service charge, change a price or take a line off. Bill this job then uses these lines, without asking the customer. A line at ₹0 is left off; if parts come back later, a part line drops to what was used.'
+          : 'Prefilled from the visit charge and the parts on this job\'s challans at the selling price, quantity = what was used. Change anything. The job waits until the customer approves; if parts come back later, a waiting estimate drops to what was used.'}</p>
         {catalogue.length > 0 && (
           <div className="grid gap-2 rounded-lg border border-border bg-muted/40 p-3">
             <p className="text-xs font-medium">Add a product</p>
@@ -194,8 +218,8 @@ function EstimateDialog({ seed, catalogue, busy, onClose, onSend }: {
             <p className="text-end text-xs tabular-nums text-muted-foreground">Subtotal ₹{subtotal.toLocaleString('en-IN')} · GST ₹{(Math.round(gst * 100) / 100).toLocaleString('en-IN')} · <strong className="text-foreground">Total ₹{total.toLocaleString('en-IN')}</strong></p>
           </div>
         )}
-        <div><Button size="sm" icon="plus" onClick={() => setLines([...lines, { description: lines.some((l) => l.description === 'Labour') ? '' : 'Labour', qty: '1', rupees: '0', gst: '18', productId: null }])}>Add labour / other cost</Button></div>
-        <textarea aria-label="Note to the customer" rows={2} value={note} onChange={(e) => setNote(e.target.value)} placeholder="Note to the customer (optional)" className="field-input" />
+        <div><Button size="sm" icon="plus" onClick={() => setLines([...lines, { description: asBill ? (lines.some((l) => l.description === 'Service charge') ? '' : 'Service charge') : lines.some((l) => l.description === 'Labour') ? '' : 'Labour', qty: '1', rupees: '0', gst: '18', productId: null }])}>{asBill ? 'Add a charge' : 'Add labour / other cost'}</Button></div>
+        {!asBill && <textarea aria-label="Note to the customer" rows={2} value={note} onChange={(e) => setNote(e.target.value)} placeholder="Note to the customer (optional)" className="field-input" />}
       </div>
     </Modal>
   );

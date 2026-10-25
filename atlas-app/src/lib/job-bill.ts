@@ -30,6 +30,8 @@ export interface BillLine {
   /** Before GST. */
   unitPaise: number;
   taxRatePct: number;
+  /** A part's product, so a bill the office changes still follows returns. */
+  productId?: string | null;
 }
 
 export interface BillItem {
