@@ -253,9 +253,24 @@ async function advancesAgainst(
  * is about to be raised, and so the hard part - working out what to charge for
  * - is testable without a transaction.
  */
+/**
+ * A charge no challan or order line carries - labour typed when an
+ * installation is billed from its own page, or material used on the job
+ * (27 Oct 2026). No product link: stock and cost were booked when the
+ * material went out, so the bill must not move it again.
+ */
+export interface ExtraBillLine {
+  productName: string;
+  qty: number;
+  unitPricePaise: number;
+  taxRatePct: number;
+  hsnCode?: string | null;
+  productCode?: string | null;
+}
+
 export async function previewConsolidatedInvoice(
   scope: StoreScope,
-  input: { challanIds: string[]; salesOrderIds: string[] },
+  input: { challanIds: string[]; salesOrderIds: string[]; extraLines?: ExtraBillLine[] },
 ): Promise<ConsolidatedDraft> {
   if (input.challanIds.length === 0 && input.salesOrderIds.length === 0) {
     throw new Error('Choose at least one challan or order to bill.');
@@ -265,7 +280,7 @@ export async function previewConsolidatedInvoice(
     where: { id: { in: input.challanIds }, ...scopeWhere(scope) },
     orderBy: { dispatchedAt: 'asc' },
     select: {
-      id: true, challanNo: true, dispatchedAt: true, isInvoiced: true, salesOrderId: true,
+      id: true, challanNo: true, dispatchedAt: true, isInvoiced: true, salesOrderId: true, customerId: true,
       items: {
         orderBy: { srNo: 'asc' },
         select: { id: true, productId: true, productName: true, qty: true, unit: true, qtyReturned: true, qtyReturnPending: true },
@@ -309,16 +324,39 @@ export async function previewConsolidatedInvoice(
     },
   });
 
-  if (orders.length === 0) throw new Error('None of that work has an order behind it to price from.');
-
   // Everything on one invoice belongs to one buyer. Two customers on one tax
   // invoice is not a thing, and letting it through here would produce a
   // document naming whichever of them happened to sort first.
-  const parties = new Set(orders.map((o) => o.partyId).filter(Boolean));
+  const parties = new Set([
+    ...orders.map((o) => o.partyId),
+    ...challans.map((c) => c.customerId),
+  ].filter(Boolean));
   if (parties.size > 1) {
     throw new Error('That work belongs to more than one customer. Bill them separately.');
   }
-  const head = orders[0];
+
+  /*
+    A challan raised with no order (27 Oct 2026): the customer is on the
+    challan itself and every line is priced from the product list - said in
+    the warnings, and the draft invoice can be changed before it is issued.
+  */
+  let head: Pick<ConsolidatedDraft, 'customerName' | 'organizationName' | 'email' | 'phone' | 'gstin' | 'billingAddress' | 'shippingAddress' | 'stateId' | 'cityId'> & { partyId: string | null };
+  if (orders.length > 0) {
+    head = orders[0];
+  } else {
+    const partyId = challans.find((c) => c.customerId)?.customerId;
+    if (!partyId) throw new Error('That work has no customer and no order behind it. Add the customer on the challan first.');
+    const p = await db.party.findFirst({
+      where: { id: partyId, ...scopeWhere(scope) },
+      select: { firstName: true, lastName: true, companyName: true, email: true, phone: true, phoneCc: true, gstin: true, addressLine1: true, state: true, city: true },
+    });
+    if (!p) throw new Error('That customer is not in your scope.');
+    const name = p.companyName || [p.firstName, p.lastName].filter(Boolean).join(' ');
+    head = {
+      partyId, customerName: name, organizationName: p.companyName, email: p.email, phone: [p.phoneCc, p.phone].filter(Boolean).join(' '),
+      gstin: p.gstin, billingAddress: p.addressLine1, shippingAddress: p.addressLine1, stateId: p.state, cityId: p.city,
+    };
+  }
   if (!head.partyId) throw new Error('That order has no customer on it, so it cannot be invoiced.');
 
   /**
@@ -382,6 +420,14 @@ export async function previewConsolidatedInvoice(
     })),
     facts,
   );
+
+  for (const x of input.extraLines ?? []) {
+    if (!x.productName.trim() || x.qty <= 0 || x.unitPricePaise <= 0) continue;
+    lines.push({
+      productId: null, productName: x.productName.trim(), productCode: x.productCode ?? null, hsnCode: x.hsnCode ?? null,
+      qty: x.qty, unitPricePaise: x.unitPricePaise, discountPct: 0, taxRatePct: x.taxRatePct, sources: [], pricedFromCatalogue: false,
+    });
+  }
 
   if (lines.length === 0) throw new Error('There is nothing to bill on that work.');
 
@@ -458,6 +504,7 @@ export async function createConsolidatedInvoice(
   input: {
     challanIds: string[];
     salesOrderIds: string[];
+    extraLines?: ExtraBillLine[];
     invoiceDate: Date;
     termsDays: number;
     poNumber?: string | null;

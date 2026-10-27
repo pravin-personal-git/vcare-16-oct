@@ -312,8 +312,8 @@ export const moveInstallationStage = (id: string, to: string) =>
 export const updateInstallationItem = (id: string, challanItemId: string, change: { fitStatus?: string; placement?: string }) =>
   send<{ ok: true }>(`/api/v1/jobs/installations/${id}`, { action: 'item', challanItemId, ...change }, { label: change.fitStatus ? `Item ${change.fitStatus}` : 'Item placement', target: `installation:${id}` });
 
-export const installationWorkDone = (id: string) =>
-  send<{ ok: true }>(`/api/v1/jobs/installations/${id}`, { action: 'workDone' }, { label: 'Installation work done', target: `installation:${id}` });
+export const installationWorkDone = (id: string, receivedBy: string | null = null) =>
+  send<{ ok: true }>(`/api/v1/jobs/installations/${id}`, { action: 'workDone', receivedBy }, { label: 'Installation work done', target: `installation:${id}` });
 
 // ------------------------------------------------------- a visit, with calls
 
@@ -396,7 +396,8 @@ export interface WorkRow {
   lat?: number | null; lng?: number | null;
 }
 export interface ScheduleRow {
-  id: string; kind: 'complaint' | 'installation'; jobId: string; no: string; customerName: string;
+  /** `survey` (servers from 27 Oct 2026): a survey with no challan yet - jobId is the visit's id. */
+  id: string; kind: 'complaint' | 'installation' | 'survey'; jobId: string; no: string; customerName: string;
   siteLocation: string | null; siteLocationNavigate?: string; purpose: string; scheduledAt: string; checkedIn: boolean;
   day: 'earlier' | 'today' | 'tomorrow';
 }

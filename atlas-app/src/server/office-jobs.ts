@@ -64,6 +64,7 @@ export async function officeJobs(scope: StoreScope, now: Date = new Date()) {
         id: true, challanNo: true, status: true, stage: true, priority: true, dispatchedAt: true, createdAt: true,
         siteLocation: true, siteLat: true, siteLng: true,
         salesOrder: { select: { customerName: true, organizationName: true, shippingAddress: true, phone: true } },
+        customer: { select: { firstName: true, lastName: true, companyName: true, phone: true, phoneCc: true, addressLine1: true } },
         assignees: { select: { userId: true, assignedAt: true } },
         items: { select: { qty: true } },
         visits: { where: OPEN_VISIT, select: { id: true, scheduledAt: true, status: true, checkedInAt: true } },
@@ -103,17 +104,17 @@ export async function officeJobs(scope: StoreScope, now: Date = new Date()) {
       const qty = ch.items.reduce((t, i) => t + i.qty, 0);
       const row = workRow({
         kind: 'installation', id: ch.id, no: ch.challanNo,
-        customerName: ch.salesOrder?.organizationName || ch.salesOrder?.customerName || 'No customer on the challan',
-        siteLocation: ch.siteLocation ?? ch.salesOrder?.shippingAddress ?? null,
+        customerName: (ch.customer && (ch.customer.companyName || [ch.customer.firstName, ch.customer.lastName].filter(Boolean).join(' '))) || ch.salesOrder?.organizationName || ch.salesOrder?.customerName || 'No customer on the challan',
+        siteLocation: ch.siteLocation ?? ch.salesOrder?.shippingAddress ?? ch.customer?.addressLine1 ?? null,
         problem: `Installation - ${qty} item${qty === 1 ? '' : 's'}`,
-        status: ch.status, statusLabel: ch.status === 'work_done' ? 'Work done - to approve' : stageLabel(ch.stage), priority: ch.priority,
-        givenAt: ch.dispatchedAt, visits: ch.visits, customerPhone: ch.salesOrder?.phone ?? null,
+        status: ch.status, statusLabel: ch.status === 'work_done' ? 'Work done - to bill' : stageLabel(ch.stage), priority: ch.priority,
+        givenAt: ch.dispatchedAt, visits: ch.visits, customerPhone: ch.customer?.phone ?? ch.salesOrder?.phone ?? null,
         lat: ch.siteLat ? Number(ch.siteLat) : null, lng: ch.siteLng ? Number(ch.siteLng) : null,
       }, now);
       const ids = ch.assignees.map((a) => a.userId);
       const group: OfficeGroup = ch.status === 'work_done' ? 'waiting'
         : ids.length === 0 ? 'unassigned'
-          : ['installing', 'testing', 'handover'].includes(ch.stage) ? 'working' : 'todo';
+          : ['fitting', 'installing', 'testing', 'handover'].includes(ch.stage) ? 'working' : 'todo';
       return {
         ...row, group, createdAt: ch.createdAt.toISOString(),
         technicianIds: ids, technicianNames: ids.map((id) => nameOf.get(id) ?? 'Technician'),

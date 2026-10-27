@@ -1,7 +1,7 @@
 import { redirect } from 'next/navigation';
 import { requireContext } from '@/server/context';
 import { db } from '@/server/db';
-import { userInScope } from '@/server/store-scope';
+import { scopeWhere, userInScope } from '@/server/store-scope';
 import { installationsList } from '@/server/installations-list';
 import { listSavedViews, shareableRoles } from '@/server/saved-views';
 import { canExportLists } from '@/lib/levels';
@@ -35,6 +35,14 @@ export default async function InstallationsPage({ searchParams }: {
   ]);
   const page = slicePage(list.rows, parseGridQuery(sp, 25));
 
+  // "Raise a challan from this survey" (27 Oct 2026): the form opens on its customer.
+  const survey = sp.survey
+    ? await db.serviceVisit.findFirst({
+      where: { id: sp.survey, ...scopeWhere(ctx.scope), reason: 'installation_survey', installationChallanId: null },
+      select: { id: true, siteAddress: true, customer: { select: { id: true, firstName: true, lastName: true, companyName: true, phone: true, addressLine1: true } } },
+    })
+    : null;
+
   return (
     <InstallationsClient
       canEdit={ctx.permissions.has('installations.edit')}
@@ -53,6 +61,14 @@ export default async function InstallationsPage({ searchParams }: {
       canExport={canExportLists(ctx.permissions)}
       views={{ initial: views, roles }}
       initialOpenId={sp.open ?? null}
+      fromSurvey={survey?.customer ? {
+        visitId: survey.id,
+        customer: {
+          id: survey.customer.id, label: survey.customer.companyName || [survey.customer.firstName, survey.customer.lastName].filter(Boolean).join(' '),
+          sub: survey.customer.phone, address: survey.customer.addressLine1,
+        },
+        site: survey.siteAddress ?? survey.customer.addressLine1,
+      } : null}
     />
   );
 }

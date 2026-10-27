@@ -178,7 +178,10 @@ export default function Visit() {
             style={{ flexDirection: 'row', alignItems: 'center', gap: space.xs }}
           >
             <Icon name="wrench" size={16} color={c.brand} />
-            <Text variant="small" weight="semibold" color={c.brand}>{v.complaintNo}</Text>
+            {/* A survey with no challan yet (servers from 27 Oct 2026) has nothing to open. */}
+            <Text variant="small" weight="semibold" color={v.complaintId || v.installationChallanId ? c.brand : c.inkSoft}>
+              {v.complaintId || v.installationChallanId ? v.complaintNo : t('Survey before installing')}
+            </Text>
           </Pressable>
         </View>
         {v.description ? (

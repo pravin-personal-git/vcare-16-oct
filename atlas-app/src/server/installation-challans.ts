@@ -100,6 +100,7 @@ export async function listInstallationChallans(
     where: { ...scopeWhere(scope), ...(opts.status ? { status: opts.status } : {}) },
     include: {
       salesOrder: { select: { orderNo: true, customerName: true, partyId: true } },
+      customer: { select: { id: true, firstName: true, lastName: true, companyName: true } },
       invoiceSources: { where: { invoice: { lifecycle: { not: 'cancelled' } } }, take: 1, select: { invoice: { select: { id: true, invoiceNo: true } } } },
       items: { select: { qty: true } },
       assignees: { include: { user: { select: { fullName: true } } } },
@@ -123,8 +124,8 @@ export async function listInstallationChallans(
     rejectionReason: r.rejectionReason,
     salesOrderId: r.salesOrderId,
     orderNo: r.salesOrder?.orderNo ?? null,
-    partyId: r.salesOrder?.partyId ?? null,
-    customerName: r.salesOrder?.customerName ?? null,
+    partyId: r.customer?.id ?? r.salesOrder?.partyId ?? null,
+    customerName: (r.customer && (r.customer.companyName || [r.customer.firstName, r.customer.lastName].filter(Boolean).join(' '))) || r.salesOrder?.customerName || null,
     itemCount: r.items.length,
     totalQty: r.items.reduce((s, i) => s + i.qty, 0),
     assignees: r.assignees.map((a) => a.user.fullName),
@@ -248,20 +249,35 @@ export async function setInstallationChallanStatus(
       approvedAt: input.to === 'approved' ? new Date() : null,
       rejectionReason: input.to === 'rejected' ? reason : null,
       completedAt: input.to === 'approved' ? new Date() : null,
-      // The working stage follows the approval loop (11 Oct 2026), whoever
-      // decides - the page, My Desk or the phone app.
-      ...(input.to === 'approved' ? { stage: 'approved' } : input.to === 'rejected' ? { stage: 'testing' } : input.to === 'work_done' ? { stage: 'handover' } : {}),
+      // Work done is when the customer has it (27 Oct 2026): the day the
+      // warranty starts, and the day it was handed over.
+      ...(input.to === 'work_done' ? { handoverAt: new Date() } : {}),
     },
   });
+  if (input.to === 'work_done') {
+    // Work done means everything on it is fitted - and the warranty on every
+    // serial fitted here that Atlas knows starts today (once only).
+    await db.installationChallanItem.updateMany({ where: { challanId: input.id, fitStatus: 'to_fit' }, data: { fitStatus: 'fitted' } });
+    const items = await db.installationChallanItem.findMany({ where: { challanId: input.id }, select: { serialNo: true, barcode: true, stockUnitId: true } });
+    const serials = items.map((i) => (i.serialNo ?? i.barcode)?.trim()).filter((x): x is string => !!x);
+    const unitIds = items.map((i) => i.stockUnitId).filter((x): x is string => !!x);
+    if (serials.length || unitIds.length) {
+      await db.stockUnit.updateMany({
+        where: { storeId, warrantyFrom: null, OR: [{ id: { in: unitIds } }, { serialNo: { in: serials } }] },
+        data: { warrantyFrom: new Date() },
+      });
+    }
+  }
+  // The stage follows whatever happened, whoever did it - the page, My Desk or the phone.
+  const { syncInstallationStage } = await import('./installation-page');
+  await syncInstallationStage(input.id, userId);
   // Installed: AMCs sold with this equipment now start today (10 Oct 2026).
   if (input.to === 'approved') {
     const { alignSaleAmcsToInstall } = await import('./amc');
     await alignSaleAmcsToInstall(storeId, input.id).catch((e) => console.error('[amc] align to install failed', e));
   }
-  if (input.to === 'work_done') {
-    const { onPending } = await import('./approval-hooks');
-    await onPending(storeId, 'installation_challan', input.id, userId);
-  }
+  // No approval request on Work done any more (27 Oct 2026): billing the
+  // installation - or Don't bill - is the office's sign-off.
 }
 
 export interface PaperSlipInput {
@@ -300,6 +316,11 @@ export async function updateInstallationChallanPaperwork(
 
 export interface CreateInstallationChallanInput {
   salesOrderId: string | null;
+  /** Required unless an order is chosen, whose customer it then is (27 Oct 2026). */
+  customerId?: string | null;
+  siteLocation?: string | null;
+  /** The survey visit this job came from - linked to the new challan. */
+  surveyVisitId?: string | null;
   physicalChallanNo: string | null;
   technicianRemark: string | null;
   note: string | null;
@@ -321,10 +342,24 @@ export async function createInstallationChallan(
     throw new InstallationChallanError('Every line needs a quantity of at least 1.');
   }
 
+  let customerId = input.customerId ?? null;
+  let site = input.siteLocation?.trim() || null;
   if (input.salesOrderId) {
-    const order = await db.salesOrder.findFirst({ where: { id: input.salesOrderId, storeId }, select: { id: true } });
+    const order = await db.salesOrder.findFirst({ where: { id: input.salesOrderId, storeId }, select: { id: true, partyId: true, shippingAddress: true } });
     if (!order) throw new InstallationChallanError('That sales order is not in your scope.');
+    if (customerId && order.partyId && customerId !== order.partyId) throw new InstallationChallanError('That sales order is for a different customer.');
+    customerId ??= order.partyId;
+    site ??= order.shippingAddress;
   }
+  if (!customerId) throw new InstallationChallanError('Choose the customer.');
+  const cust = await db.party.findFirst({ where: { id: customerId, storeId }, select: { id: true, addressLine1: true } });
+  if (!cust) throw new InstallationChallanError('That customer is not in your scope.');
+  site ??= cust.addressLine1;
+  const survey = input.surveyVisitId
+    ? await db.serviceVisit.findFirst({ where: { id: input.surveyVisitId, storeId, reason: 'installation_survey' }, select: { id: true, customerId: true, installationChallanId: true } })
+    : null;
+  if (input.surveyVisitId && !survey) throw new InstallationChallanError('That survey is not in your scope.');
+  if (survey?.installationChallanId) throw new InstallationChallanError('That survey already belongs to another challan.');
 
   // Assignees must belong to this store - the same relation-scoping every user
   // query in this codebase uses, and the reason `userInScope` exists.
@@ -346,7 +381,10 @@ export async function createInstallationChallan(
         storeId,
         challanNo,
         salesOrderId: input.salesOrderId,
+        customerId,
+        siteLocation: site,
         status: 'pending',
+        stage: input.assigneeIds.length ? 'technician' : 'raised',
         physicalChallanNo: input.physicalChallanNo?.trim() || null,
         technicianRemark: input.technicianRemark?.trim() || null,
         note: input.note?.trim() || null,
@@ -377,6 +415,10 @@ export async function createInstallationChallan(
       });
     }
 
+    if (survey) {
+      await tx.serviceVisit.update({ where: { id: survey.id }, data: { installationChallanId: challan.id } });
+    }
+
     return challan.id;
   });
 }
@@ -401,18 +443,24 @@ export async function updateInstallationChallan(
 ): Promise<void> {
   const storeId = scopeForWrite(scope);
   const current = await db.installationChallan.findFirst({
-    where: { id: input.id, storeId }, select: { id: true, status: true, items: { select: { id: true } } },
+    where: { id: input.id, storeId }, select: { id: true, status: true, isInvoiced: true, notBilledReason: true, items: { select: { id: true } } },
   });
   if (!current) throw new InstallationChallanError('That challan is not in your scope.');
-  if (current.status === 'approved') {
-    throw new InstallationChallanError('This challan is approved, so it is locked. Ask the approver to send it back first.');
+  if (current.isInvoiced || current.notBilledReason) {
+    throw new InstallationChallanError('This installation is billed, so it is locked.');
   }
   if (input.items.length === 0) throw new InstallationChallanError('Add at least one product - a slip with nothing on it records nothing.');
   if (input.items.some((i) => i.qty <= 0)) throw new InstallationChallanError('Every line needs a quantity of at least 1.');
   if (Number.isNaN(input.dispatchedAt.getTime())) throw new InstallationChallanError('Choose a valid date.');
+  let customerId = input.customerId ?? undefined;
   if (input.salesOrderId) {
-    const order = await db.salesOrder.findFirst({ where: { id: input.salesOrderId, storeId }, select: { id: true } });
+    const order = await db.salesOrder.findFirst({ where: { id: input.salesOrderId, storeId }, select: { id: true, partyId: true } });
     if (!order) throw new InstallationChallanError('That sales order is not in your scope.');
+    customerId ??= order.partyId ?? undefined;
+  }
+  if (customerId) {
+    const cust = await db.party.findFirst({ where: { id: customerId, storeId }, select: { id: true } });
+    if (!cust) throw new InstallationChallanError('That customer is not in your scope.');
   }
   const assignees = [...new Set(input.assigneeIds)];
   if (assignees.length > 0) {
@@ -427,6 +475,7 @@ export async function updateInstallationChallan(
       where: { id: current.id },
       data: {
         salesOrderId: input.salesOrderId, dispatchedAt: input.dispatchedAt,
+        ...(customerId ? { customerId } : {}),
         physicalChallanNo: input.physicalChallanNo?.trim() || null,
         technicianRemark: input.technicianRemark?.trim() || null,
         note: input.note?.trim() || null,

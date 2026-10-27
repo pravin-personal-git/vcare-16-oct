@@ -38,7 +38,7 @@ export default function Installations() {
   const tone = (s: string): 'success' | 'brand' | 'neutral' =>
     s === 'approved' ? 'success' : s === 'work_done' ? 'brand' : 'neutral';
   const label = (s: string) =>
-    s === 'work_done' ? t('Work done') : s === 'approved' ? t('Approved') : t('To fit');
+    s === 'work_done' ? t('Work done') : s === 'approved' ? t('Billed') : t('To fit');
 
   return (
     <SubScreen title={t('Installations')} subtitle={t('Fittings assigned to you')} onRefresh={reload}>

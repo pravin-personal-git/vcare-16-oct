@@ -719,6 +719,8 @@ export interface ServiceVisitRow {
   subject: 'complaint' | 'installation';
   complaintId: string | null;
   installationChallanId: string | null;
+  /** A survey booked against the customer alone, with no challan yet (27 Oct 2026). */
+  surveyOnly: boolean;
   /** The complaint number or the challan number - whichever this visit is for. */
   docNo: string;
   /** The customer, so the name opens their page (G-35). Null when an installation has no order. */
@@ -759,8 +761,14 @@ export async function listServiceVisits(scope: StoreScope, opts: { status?: stri
       installationChallan: {
         // The order carries the customer's name denormalised, as every
         // document in this schema does - what they were called then.
-        select: { challanNo: true, salesOrder: { select: { customerName: true, partyId: true } } },
+        select: {
+          challanNo: true, customerId: true,
+          customer: { select: { firstName: true, lastName: true, companyName: true } },
+          salesOrder: { select: { customerName: true, partyId: true } },
+        },
       },
+      // A survey's own customer (27 Oct 2026).
+      customer: { select: { firstName: true, lastName: true, companyName: true } },
     },
     orderBy: { scheduledAt: 'desc' },
     take: LIST_MAX_ROWS,
@@ -770,16 +778,18 @@ export async function listServiceVisits(scope: StoreScope, opts: { status?: stri
     subject: (v.complaint ? 'complaint' : 'installation') as 'complaint' | 'installation',
     complaintId: v.complaintId,
     installationChallanId: v.installationChallanId,
-    docNo: v.complaint?.complaintNo ?? v.installationChallan?.challanNo ?? '-',
+    surveyOnly: !v.complaint && !v.installationChallan,
+    docNo: v.complaint?.complaintNo ?? v.installationChallan?.challanNo ?? 'Survey',
     /*
       An installation's customer comes through its sales order, and a challan
       raised without one has no customer to name. Saying so beats an empty
       cell that reads as a loading failure.
     */
-    customerId: v.complaint ? v.complaint.customerId : (v.installationChallan?.salesOrder?.partyId ?? null),
+    customerId: v.complaint ? v.complaint.customerId : (v.customerId ?? v.installationChallan?.customerId ?? v.installationChallan?.salesOrder?.partyId ?? null),
     customerName: v.complaint
       ? (v.complaint.customer.companyName || [v.complaint.customer.firstName, v.complaint.customer.lastName].filter(Boolean).join(' '))
-      : (v.installationChallan?.salesOrder?.customerName || 'No order on the challan'),
+      : ((() => { const p = v.customer ?? v.installationChallan?.customer; return p ? (p.companyName || [p.firstName, p.lastName].filter(Boolean).join(' ')) : null; })()
+        || v.installationChallan?.salesOrder?.customerName || 'No customer on the challan'),
     technicianId: v.technicianId, technicianName: v.technician.fullName,
     purpose: v.purpose, reason: v.reason, scheduledAt: v.scheduledAt, status: v.status, outcomeNote: v.outcomeNote,
     // Only a complaint carries site coordinates, so only a complaint visit can
@@ -808,11 +818,11 @@ export async function scheduleInstallationVisit(
   scope: StoreScope, challanId: string, technicianId: string, reason: string, scheduledAt: Date, userId: string | null,
 ) {
   const storeId = scopeForWrite(scope);
-  if (visitSubject(reason) !== 'installation') {
+  if (visitSubject(reason) === 'complaint') {
     throw new ComplaintError('That reason belongs to a complaint, not to an installation.');
   }
   if (Number.isNaN(scheduledAt.getTime())) throw new ComplaintError('Choose the visit date and time.');
-  const challan = await db.installationChallan.findFirst({ where: { id: challanId, storeId }, select: { id: true, challanNo: true } });
+  const challan = await db.installationChallan.findFirst({ where: { id: challanId, storeId }, select: { id: true, challanNo: true, customerId: true } });
   if (!challan) throw new ComplaintError('That installation challan is not in your scope.');
   const tech = await db.user.findFirst({ where: { id: technicianId, ...userInScope(scope) }, select: { id: true } });
   if (!tech) throw new ComplaintError('That technician is not in your scope.');
@@ -821,8 +831,46 @@ export async function scheduleInstallationVisit(
   // `info_collection` purpose and never asks for a site check-in.
   const purpose = reason === 'installation_survey' ? 'info_collection' : 'field_visit';
   await db.serviceVisit.create({
-    data: { storeId, installationChallanId: challanId, technicianId, purpose, reason, scheduledAt, createdBy: userId },
+    data: { storeId, installationChallanId: challanId, customerId: challan.customerId, technicianId, purpose, reason, scheduledAt, createdBy: userId },
   });
+  const { syncInstallationStage } = await import('./installation-page');
+  await syncInstallationStage(challanId, userId);
+}
+
+/**
+ * SURVEY BEFORE INSTALLING, FOR ANY CUSTOMER (27 Oct 2026, Vcare).
+ *
+ * A survey happens before anything is sold, so there is no challan to book it
+ * against. It hangs off the customer, with the site address on the visit so
+ * the phone knows where to go. A challan can still be linked - never required.
+ * A looking trip (`info_collection`): the phone never asks for a check-in.
+ */
+export async function scheduleSurveyVisit(
+  scope: StoreScope,
+  input: { customerId: string; siteAddress: string | null; challanId: string | null },
+  technicianId: string, scheduledAt: Date, userId: string | null,
+) {
+  const storeId = scopeForWrite(scope);
+  if (Number.isNaN(scheduledAt.getTime())) throw new ComplaintError('Choose the visit date and time.');
+  const customer = await db.party.findFirst({ where: { id: input.customerId, storeId }, select: { id: true, addressLine1: true } });
+  if (!customer) throw new ComplaintError('That customer is not in your scope.');
+  if (input.challanId) {
+    const ch = await db.installationChallan.findFirst({ where: { id: input.challanId, storeId }, select: { id: true } });
+    if (!ch) throw new ComplaintError('That installation challan is not in your scope.');
+  }
+  const tech = await db.user.findFirst({ where: { id: technicianId, ...userInScope(scope) }, select: { id: true } });
+  if (!tech) throw new ComplaintError('That technician is not in your scope.');
+  await db.serviceVisit.create({
+    data: {
+      storeId, customerId: customer.id, installationChallanId: input.challanId, technicianId,
+      purpose: 'info_collection', reason: 'installation_survey', scheduledAt, createdBy: userId,
+      siteAddress: input.siteAddress?.trim() || customer.addressLine1 || null,
+    },
+  });
+  if (input.challanId) {
+    const { syncInstallationStage } = await import('./installation-page');
+    await syncInstallationStage(input.challanId, userId);
+  }
 }
 
 export async function scheduleVisit(
@@ -935,6 +983,13 @@ export async function cancelVisit(scope: StoreScope, visitId: string, reason: st
     }
   });
   if (visit.complaintId) await jobEvent(visit.complaintId, 'visit_changed', `cancelled (${why})`);
+  if (visit.installationChallanId) await syncInstallationStageOf(visit.installationChallanId, userId);
+}
+
+/** An installation's stage follows its visits (27 Oct 2026). */
+async function syncInstallationStageOf(challanId: string, userId: string | null) {
+  const { syncInstallationStage } = await import('./installation-page');
+  await syncInstallationStage(challanId, userId).catch((e) => console.error('[installation] stage sync failed', e));
 }
 
 export async function completeVisit(
@@ -1025,6 +1080,7 @@ export async function completeVisit(
       }
     }
   });
+  if (visit.installationChallanId) await syncInstallationStageOf(visit.installationChallanId, userId);
 }
 
 export interface FieldCheckInInput {
@@ -1127,6 +1183,7 @@ export async function fieldCheckIn(
       });
     }
   });
+  if (visit.installationChallanId) await syncInstallationStageOf(visit.installationChallanId, userId);
 
   return { withinRange, distanceMeters, radiusMeters };
 }

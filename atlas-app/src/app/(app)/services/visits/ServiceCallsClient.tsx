@@ -13,9 +13,11 @@ import { Icon } from '@/components/ui/Icon';
 import { useRouter } from 'next/navigation';
 import { Modal } from '@/components/ui/Modal';
 import { Button } from '@/components/ui/Button';
+import { CustomerPicker } from '@/components/services/CustomerPicker';
+import type { CustomerPick } from '@/app/actions/search-options';
 import { SearchSelect, type SearchOption } from '@/components/ui/SearchSelect';
 import { searchOpenComplaintsAction, searchOpenInstallationsAction } from '@/app/actions/search-options';
-import { scheduleVisitAction, completeVisitAction } from '../actions';
+import { scheduleSurveyVisitAction, scheduleVisitAction, completeVisitAction } from '../actions';
 import { VISIT_REASONS, visitReason, visitReasonLabel, reasonsFor, type VisitReason } from '@/lib/visit-reasons';
 
 type Visit = {
@@ -23,6 +25,8 @@ type Visit = {
   /** What the visit is about - a complaint, or a new installation (7 Oct 2026). */
   subject: 'complaint' | 'installation';
   complaintId: string | null; installationChallanId: string | null;
+  /** A survey booked against the customer alone - no challan yet (27 Oct 2026). */
+  surveyOnly?: boolean;
   customerId: string | null;
   /** The complaint number or the challan number, whichever this is. */
   docNo: string;
@@ -182,14 +186,18 @@ export function ServiceCallsClient({
                       with that row rung (OpenTarget), which is where the
                       items and the sign-off live.
                     */}
-                    <Link
-                      href={v.subject === 'complaint'
-                        ? `/services/complaints/${v.complaintId}`
-                        : `/services/installations/${v.installationChallanId}`}
-                      className="font-mono text-xs font-semibold text-brand hover:underline"
-                    >
-                      {v.docNo}
-                    </Link>
+                    {v.surveyOnly ? (
+                      <span className="font-mono text-xs font-semibold text-muted-foreground">Survey · no challan yet</span>
+                    ) : (
+                      <Link
+                        href={v.subject === 'complaint'
+                          ? `/services/complaints/${v.complaintId}`
+                          : `/services/installations/${v.installationChallanId}`}
+                        className="font-mono text-xs font-semibold text-brand hover:underline"
+                      >
+                        {v.docNo}
+                      </Link>
+                    )}
                     <StatusBadge status={v.status} />
                     {/* WHY the technician is going - the thing Pravin asked for. */}
                     <Badge
@@ -208,6 +216,11 @@ export function ServiceCallsClient({
                     {v.technicianName} · {new Date(v.scheduledAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}
                   </p>
                   {v.outcomeNote && <p className="mt-1.5 text-sm text-muted-foreground">{v.outcomeNote}</p>}
+                  {v.surveyOnly && v.status !== 'cancelled' && (
+                    <Link href={`/services/installations?survey=${v.id}`} className="mt-1.5 inline-flex items-center gap-1 text-xs font-medium text-brand hover:underline">
+                      <Icon name="file-text" className="h-3.5 w-3.5" /> Raise a challan from this survey
+                    </Link>
+                  )}
                   {v.purpose === 'field_visit' && v.checkedInAt && (
                     <p className={`mt-1.5 text-xs font-medium ${v.checkInWithinRange ? 'text-success' : 'text-warning'}`}>
                       Checked in {v.checkInDistanceM != null ? `· ${v.checkInDistanceM}m from site` : ''}
@@ -287,6 +300,10 @@ function ScheduleDialog({
   const [pending, startTransition] = useTransition();
 
   const forInstallation = reason.subject === 'installation';
+  // Survey before installing (27 Oct 2026): any customer, the site, a challan only if there is one.
+  const forSurvey = reason.subject === 'customer';
+  const [customer, setCustomer] = useState<CustomerPick | null>(null);
+  const [site, setSite] = useState('');
 
   const pickReason = (key: string) => {
     const next = visitReason(key);
@@ -303,6 +320,17 @@ function ScheduleDialog({
 
   const save = () => {
     setError(null);
+    if (forSurvey) {
+      if (!customer) { setError('Choose the customer.'); return; }
+      if (!technicianId) { setError('Choose who is going.'); return; }
+      if (!scheduledAt) { setError('Choose the date and time.'); return; }
+      startTransition(async () => {
+        const res = await scheduleSurveyVisitAction({ customerId: customer.id, siteAddress: site.trim() || null, challanId: subject?.id ?? null, technicianId, scheduledAt });
+        if (res.error) { setError(res.error); return; }
+        onClose();
+      });
+      return;
+    }
     if (!subject) { setError(forInstallation ? 'Choose the installation challan.' : 'Choose the complaint.'); return; }
     if (!technicianId) { setError('Choose who is going.'); return; }
     if (!scheduledAt) { setError('Choose the date and time.'); return; }
@@ -362,8 +390,20 @@ function ScheduleDialog({
         </fieldset>
 
         {/* ---- 2. what, which the reason decides ---------------------- */}
+        {forSurvey && (
+          <>
+            <div className="grid gap-1 text-xs font-medium text-muted-foreground">
+              <label htmlFor="visit-customer">Customer</label>
+              <CustomerPicker id="visit-customer" value={customer} onChange={(c) => { setCustomer(c); if (c?.address && !site.trim()) setSite(c.address); }} />
+            </div>
+            <label className="grid gap-1 text-xs font-medium text-muted-foreground">
+              Site address
+              <input value={site} onChange={(e) => setSite(e.target.value)} placeholder="Where the technician goes" className={fieldClass} />
+            </label>
+          </>
+        )}
         <div className="grid gap-1 text-xs font-medium text-muted-foreground">
-          <label htmlFor="visit-subject">{forInstallation ? 'Installation challan' : 'Complaint'}</label>
+          <label htmlFor="visit-subject">{forSurvey ? <>Installation challan <span className="font-normal">optional</span></> : forInstallation ? 'Installation challan' : 'Complaint'}</label>
           <SearchSelect
             /*
               Keyed on the subject so the box drops its own results when the
@@ -374,8 +414,8 @@ function ScheduleDialog({
             id="visit-subject"
             value={subject}
             onChange={setSubject}
-            search={forInstallation ? searchOpenInstallationsAction : searchOpenComplaintsAction}
-            placeholder={forInstallation ? 'Challan no, order no, customer or phone...' : 'Complaint no, customer or phone...'}
+            search={forInstallation || forSurvey ? searchOpenInstallationsAction : searchOpenComplaintsAction}
+            placeholder={forSurvey ? 'Only if the customer already has one - leave empty' : forInstallation ? 'Challan no, order no, customer or phone...' : 'Complaint no, customer or phone...'}
           />
           {forInstallation && (
             <p className="text-micro font-normal text-muted-foreground">
@@ -416,6 +456,11 @@ function ScheduleDialog({
           Said here because it is the first question somebody will ask of this
           screen: booking a date does not touch the challan's own sign-off.
         */}
+        {forSurvey && (
+          <p className="text-micro text-muted-foreground">
+            A looking trip - the phone does not ask for a check-in. When it is done, raise the challan from the survey.
+          </p>
+        )}
         {forInstallation && (
           <p className="text-micro text-muted-foreground">
             This books the appointment only. The challan&rsquo;s own status stays where the store left it.

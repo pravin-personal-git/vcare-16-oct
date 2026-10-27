@@ -27,7 +27,9 @@ export default function Schedule() {
 
   const by = (d: ScheduleRow['day']) => (data?.schedule ?? []).filter((v) => v.day === d)
     .filter((v) => (v.kind === 'complaint' ? access.layout.types.complaints : access.layout.types.installations));
-  const open = (v: ScheduleRow) => (v.kind === 'complaint'
+  const open = (v: ScheduleRow) => (v.kind === 'survey'
+    ? router.push({ pathname: '/employee/visit/[id]', params: { id: v.jobId } })
+    : v.kind === 'complaint'
     ? router.push({ pathname: '/employee/complaint/[id]', params: { id: v.jobId } })
     : router.push({ pathname: '/employee/installation/[id]', params: { id: v.jobId } }));
   const time = (iso: string) => new Date(iso).toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit' });
@@ -44,7 +46,7 @@ export default function Schedule() {
           </View>
           <View style={{ flex: 1, gap: 2 }}>
             <Text weight="bold" numberOfLines={1}>{v.customerName}</Text>
-            <Text variant="small" color={c.inkSoft}>{`${t(v.kind === 'installation' ? 'Installation' : 'Complaint')} · ${v.no}`}</Text>
+            <Text variant="small" color={c.inkSoft}>{v.kind === 'survey' ? t('Survey before installing') : `${t(v.kind === 'installation' ? 'Installation' : 'Complaint')} · ${v.no}`}</Text>
             {v.siteLocation ? <Text variant="small" color={c.inkSoft} numberOfLines={1}>{v.siteLocation}</Text> : null}
             {v.checkedIn && <Text variant="small" weight="semibold" color={c.success}>{t('Checked in')}</Text>}
           </View>

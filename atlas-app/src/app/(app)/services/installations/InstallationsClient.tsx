@@ -16,7 +16,8 @@ import { Modal } from '@/components/ui/Modal';
 import { AdvanceDialog } from './AdvanceDialog';
 import { QuickVisitDialog } from '@/components/services/QuickVisitDialog';
 import { SearchSelect, type SearchOption } from '@/components/ui/SearchSelect';
-import { searchGoodsAction, searchOpenOrdersAction } from '@/app/actions/search-options';
+import { searchGoodsAction, searchOpenOrdersAction, customerSurveysAction, type CustomerPick } from '@/app/actions/search-options';
+import { CustomerPicker } from '@/components/services/CustomerPicker';
 import { istDate } from '@/lib/date-ranges';
 import {
   setChallanStatusAction, updatePaperworkAction,
@@ -36,7 +37,7 @@ type StaffOption = { id: string; fullName: string };
 type Item = { id: string; srNo: number; productName: string; barcode: string | null; qty: number; unit: string | null };
 
 const STATUS_LABEL: Record<string, string> = {
-  pending: 'Pending', work_done: 'Work done', approved: 'Approved',
+  pending: 'Pending', work_done: 'Work done', approved: 'Billed / closed',
   rejected: 'Rejected', legacy_unknown: 'Not recorded',
 };
 /** The shared colour for each challan word (lib/status-tones). */
@@ -46,8 +47,10 @@ const fieldClass = 'w-full rounded-lg border border-border bg-background px-2.5 
 const btn = 'inline-flex h-8 items-center gap-1.5 rounded-sm border border-border bg-card px-3 text-xs font-semibold shadow-card transition hover:bg-muted disabled:opacity-50';
 
 export function InstallationsClient({
-  canEdit, challans, paging, counts, status, rangeLabel, totalAll, technicians, staff, canExport, views, initialOpenId = null,
+  canEdit, challans, paging, counts, status, rangeLabel, totalAll, technicians, staff, canExport, views, initialOpenId = null, fromSurvey = null,
 }: {
+  /** ?survey= - "Raise a challan from this survey": the form opens on its customer (27 Oct 2026). */
+  fromSurvey?: { visitId: string; customer: CustomerPick; site: string | null } | null;
   /** From `?open=`, so a global-search hit opens the record itself. */
   initialOpenId?: string | null;
   canEdit: boolean;
@@ -75,13 +78,16 @@ export function InstallationsClient({
   const [editing, setEditing] = useState<Challan | null>(null);
   const [fullEdit, setFullEdit] = useState<Challan | null>(null);
   const [showCreate, setShowCreate] = useState(false);
+  // Opened after the first paint: the dialog is portalled, so opening it on the
+  // server render would not match what the browser draws.
+  useEffect(() => { if (fromSurvey) setShowCreate(true); }, [fromSurvey?.visitId]); // eslint-disable-line react-hooks/exhaustive-deps
   const [advanceFor, setAdvanceFor] = useState<Challan | null>(null);
   const router = useRouter();
 
   const cards: KpiCard[] = [
     { key: 'pending', label: 'Pending', count: counts.pending ?? 0, icon: 'clock', tone: 'info' },
     { key: 'work_done', label: 'Work done', count: counts.work_done ?? 0, icon: 'check', tone: 'success' },
-    { key: 'approved', label: 'Approved', count: counts.approved ?? 0, icon: 'check-circle', tone: 'success' },
+    { key: 'approved', label: 'Billed / closed', count: counts.approved ?? 0, icon: 'check-circle', tone: 'success' },
     { key: 'rejected', label: 'Sent back', count: counts.rejected ?? 0, icon: 'x-circle', tone: 'danger' },
     { key: 'legacy_unknown', label: 'Not recorded', count: counts.legacy_unknown ?? 0, icon: 'info' },
   ];
@@ -210,12 +216,12 @@ export function InstallationsClient({
                     Mark work done
                   </button>
                 )}
-                {canEdit && (c.status === 'work_done' || c.status === 'legacy_unknown') && (
-                  <button type="button" className={btn} disabled={pending}
-                    onClick={() => run(() => setChallanStatusAction({ id: c.id, to: 'approved' }))}>
-                    <Icon name="check" className="h-3.5 w-3.5" />
-                    Approve
-                  </button>
+                {/* Billing is the sign-off now (27 Oct 2026) - done on the installation's page. */}
+                {c.status === 'work_done' && !c.isInvoiced && (
+                  <Link href={`/services/installations/${c.id}`} className={btn}>
+                    <Icon name="file-text" className="h-3.5 w-3.5" />
+                    Bill
+                  </Link>
                 )}
                 {canEdit && c.status !== 'approved' && c.status !== 'rejected' && (
                   <button type="button" className={btn} disabled={pending}
@@ -334,11 +340,14 @@ export function InstallationsClient({
           onClose={() => setBooking(null)} onDone={() => { setBooking(null); router.refresh(); }} />
       )}
       {showCreate && (
-        <ChallanForm staff={staff} pending={pending}
-          onClose={() => setShowCreate(false)}
+        <ChallanForm staff={staff} pending={pending} fromSurvey={fromSurvey}
+          onClose={() => { setShowCreate(false); if (fromSurvey) router.replace('/services/installations'); }}
           onSave={(input) => run(async () => {
             const res = await createInstallationChallanAction(input);
-            if (!res.error) setShowCreate(false);
+            if (!res.error) {
+              setShowCreate(false);
+              if (res.id) router.push(`/services/installations/${res.id}`);
+            }
             return res;
           })} />
       )}
@@ -417,7 +426,8 @@ function PaperworkForm({
 }
 
 type SaveInput = {
-  salesOrderId: string | null; physicalChallanNo: string | null; dispatchedAt: string;
+  salesOrderId: string | null; customerId?: string | null; siteLocation?: string | null; surveyVisitId?: string | null;
+  physicalChallanNo: string | null; dispatchedAt: string;
   technicianRemark: string | null; note: string | null; assigneeIds: string[];
   items: { id?: string | null; productId: string | null; productName: string; barcode: string | null; qty: number; unit: string | null }[];
 };
@@ -457,14 +467,28 @@ function EditLoader({ challan, staff, pending, onClose, onSave }: {
  * Raise a challan, or correct a saved one (health check SVC-3). Orders and
  * products are searched as you type instead of loading every one (PERF-2).
  */
-function ChallanForm({ staff, pending, onClose, onSave, initial }: {
+function ChallanForm({ staff, pending, onClose, onSave, initial, fromSurvey = null }: {
   staff: StaffOption[]; pending: boolean; onClose: () => void; onSave: (input: SaveInput) => void;
+  fromSurvey?: { visitId: string; customer: CustomerPick; site: string | null } | null;
   initial?: {
     challanNo: string; order: SearchOption | null; assigneeIds: string[]; slip: string; remark: string; note: string;
     dispatchedAt: string; lines: Line[];
   };
 }) {
   const [order, setOrder] = useState<SearchOption | null>(initial?.order ?? null);
+  // Customer first (27 Oct 2026): a challan names its customer, with or without an order.
+  const [customer, setCustomer] = useState<CustomerPick | null>(fromSurvey?.customer ?? null);
+  const [site, setSite] = useState(fromSurvey?.site ?? '');
+  const [surveys, setSurveys] = useState<{ id: string; label: string }[]>([]);
+  const [surveyId, setSurveyId] = useState(fromSurvey?.visitId ?? '');
+  const customerId = customer?.id ?? null;
+  const editing = !!initial;
+  useEffect(() => {
+    if (editing || !customerId) { setSurveys([]); return; }
+    let live = true;
+    void customerSurveysAction(customerId).then((r) => { if (live) setSurveys(r); });
+    return () => { live = false; };
+  }, [customerId, editing]);
   const [slip, setSlip] = useState(initial?.slip ?? '');
   const [remark, setRemark] = useState(initial?.remark ?? '');
   const [note, setNote] = useState(initial?.note ?? '');
@@ -473,12 +497,12 @@ function ChallanForm({ staff, pending, onClose, onSave, initial }: {
   const [lines, setLines] = useState<Line[]>(initial?.lines.length ? initial.lines : [{ product: null, unit: null, barcode: '', qty: '1' }]);
 
   const set = (i: number, patch: Partial<Line>) => setLines((ls) => ls.map((l, x) => (x === i ? { ...l, ...patch } : l)));
-  const ready = lines.some((l) => l.product && Number(l.qty) > 0);
+  const ready = lines.some((l) => l.product && Number(l.qty) > 0) && (!!initial || !!customer || !!order);
 
   return (
     <Modal
       title={initial ? `Edit ${initial.challanNo}` : 'Raise an installation challan'}
-      subtitle={initial ? 'Every change is kept in the activity log' : 'What was fitted, where, and who fitted it'}
+      subtitle={initial ? 'Every change is kept in the activity log' : 'Who it is for, what goes up, and who goes'}
       icon="file-text"
       size="md"
       onClose={onClose}
@@ -488,6 +512,7 @@ function ChallanForm({ staff, pending, onClose, onSave, initial }: {
           <button type="button" disabled={pending || !ready}
             onClick={() => onSave({
               salesOrderId: order?.id ?? null,
+              ...(initial ? {} : { customerId: customer?.id ?? null, siteLocation: site.trim() || null, surveyVisitId: surveyId || null }),
               physicalChallanNo: slip.trim() || null,
               dispatchedAt: `${date}T12:00:00+05:30`,
               technicianRemark: remark.trim() || null,
@@ -511,9 +536,32 @@ function ChallanForm({ staff, pending, onClose, onSave, initial }: {
       }
     >
       <div className="flex flex-col gap-3">
-        <div>
-          <label className="mb-1 block text-xs font-medium" htmlFor="cr-order">Sales order</label>
-          <SearchSelect id="cr-order" value={order} onChange={setOrder} search={searchOpenOrdersAction} placeholder="Order number or customer - or leave empty" />
+        {!initial && (
+          <>
+            <div>
+              <label className="mb-1 block text-xs font-medium" htmlFor="cr-customer">Customer *</label>
+              <CustomerPicker id="cr-customer" value={customer} onChange={(c) => { setCustomer(c); if (c?.address && !site.trim()) setSite(c.address); }} />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-medium" htmlFor="cr-site">Site address</label>
+              <input id="cr-site" value={site} onChange={(e) => setSite(e.target.value)} placeholder="Where it is being fitted" className={fieldClass} />
+            </div>
+          </>
+        )}
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div>
+            <label className="mb-1 block text-xs font-medium" htmlFor="cr-order">Sales order <span className="font-normal text-muted-foreground">optional</span></label>
+            <SearchSelect id="cr-order" value={order} onChange={setOrder} search={searchOpenOrdersAction} placeholder="Fills the prices - or leave empty" />
+          </div>
+          {!initial && (
+            <div>
+              <label className="mb-1 block text-xs font-medium" htmlFor="cr-survey">From a survey <span className="font-normal text-muted-foreground">optional</span></label>
+              <select id="cr-survey" value={surveyId} onChange={(e) => setSurveyId(e.target.value)} disabled={!surveys.length} className={fieldClass}>
+                <option value="">{!customer ? 'Choose the customer first' : surveys.length ? 'None' : 'No survey for this customer'}</option>
+                {surveys.map((x) => <option key={x.id} value={x.id}>{x.label}</option>)}
+              </select>
+            </div>
+          )}
         </div>
 
         <div className="grid gap-3 sm:grid-cols-2">
@@ -529,14 +577,16 @@ function ChallanForm({ staff, pending, onClose, onSave, initial }: {
               ))}
             </div>
           </div>
-          <div>
-            <label className="mb-1 block text-xs font-medium" htmlFor="cr-date">Date fitted</label>
-            <input id="cr-date" type="date" value={date} onChange={(e) => setDate(e.target.value)} className={fieldClass} />
-          </div>
+          {initial && (
+            <div>
+              <label className="mb-1 block text-xs font-medium" htmlFor="cr-date">Date</label>
+              <input id="cr-date" type="date" value={date} onChange={(e) => setDate(e.target.value)} className={fieldClass} />
+            </div>
+          )}
         </div>
 
         <div>
-          <span className="mb-1 block text-xs font-medium">What was fitted</span>
+          <span className="mb-1 block text-xs font-medium">What goes up</span>
           <div className="flex flex-col gap-3">
             {lines.map((l, i) => (
               <div key={i} className="rounded-lg border border-border p-2">
@@ -566,20 +616,29 @@ function ChallanForm({ staff, pending, onClose, onSave, initial }: {
             className="mt-2 text-xs font-medium text-brand">+ Add another line</button>
         </div>
 
-        <div className="grid gap-3 sm:grid-cols-2">
-          <div>
-            <label className="mb-1 block text-xs font-medium" htmlFor="cr-slip">Paper slip number</label>
-            <input id="cr-slip" value={slip} onChange={(e) => setSlip(e.target.value)} className={fieldClass} />
-          </div>
+        {/*
+          Date fitted, paper slip and the technician's remark belong to the job
+          as it happens (27 Oct 2026) - the phone fills them, and the paper slip
+          is on the job page's menu. Still here when correcting a saved one.
+        */}
+        <div className={initial ? 'grid gap-3 sm:grid-cols-2' : ''}>
+          {initial && (
+            <div>
+              <label className="mb-1 block text-xs font-medium" htmlFor="cr-slip">Paper slip number</label>
+              <input id="cr-slip" value={slip} onChange={(e) => setSlip(e.target.value)} className={fieldClass} />
+            </div>
+          )}
           <div>
             <label className="mb-1 block text-xs font-medium" htmlFor="cr-note">Office note</label>
             <input id="cr-note" value={note} onChange={(e) => setNote(e.target.value)} className={fieldClass} />
           </div>
         </div>
-        <div>
-          <label className="mb-1 block text-xs font-medium" htmlFor="cr-remark">Technician&apos;s remark</label>
-          <textarea id="cr-remark" value={remark} onChange={(e) => setRemark(e.target.value)} rows={2} className={fieldClass} />
-        </div>
+        {initial && (
+          <div>
+            <label className="mb-1 block text-xs font-medium" htmlFor="cr-remark">Technician&apos;s remark</label>
+            <textarea id="cr-remark" value={remark} onChange={(e) => setRemark(e.target.value)} rows={2} className={fieldClass} />
+          </div>
+        )}
       </div>
     </Modal>
   );

@@ -68,7 +68,8 @@ export async function myWork(scope: StoreScope, userId: string, opts: { withInst
         scheduledAt: { lt: new Date(now.getTime() + 2 * 86_400_000) },
       },
       select: {
-        id: true, purpose: true, scheduledAt: true, checkedInAt: true, complaintId: true, installationChallanId: true,
+        id: true, purpose: true, scheduledAt: true, checkedInAt: true, complaintId: true, installationChallanId: true, siteAddress: true,
+        customer: { select: { firstName: true, lastName: true, companyName: true, addressLine1: true } },
         complaint: {
           select: {
             complaintNo: true, siteLocation: true, status: true,
@@ -76,7 +77,11 @@ export async function myWork(scope: StoreScope, userId: string, opts: { withInst
           },
         },
         installationChallan: {
-          select: { challanNo: true, siteLocation: true, status: true, salesOrder: { select: { customerName: true, organizationName: true, shippingAddress: true } } },
+          select: {
+            challanNo: true, siteLocation: true, status: true, isInvoiced: true,
+            customer: { select: { firstName: true, lastName: true, companyName: true } },
+            salesOrder: { select: { customerName: true, organizationName: true, shippingAddress: true } },
+          },
         },
       },
       orderBy: { scheduledAt: 'asc' },
@@ -126,17 +131,27 @@ export async function myWork(scope: StoreScope, userId: string, opts: { withInst
     const day = scheduleDay(v.scheduledAt, now);
     if (!day) continue;
     const isComplaint = !!v.complaint;
+    // A survey with no challan yet (27 Oct 2026): opens on the visit itself.
+    if (!isComplaint && !v.installationChallan) {
+      if (!v.customer) continue;
+      schedule.push({
+        id: v.id, kind: 'survey', jobId: v.id, no: 'Survey',
+        customerName: person(v.customer), siteLocation: v.siteAddress ?? v.customer.addressLine1 ?? null,
+        purpose: v.purpose, scheduledAt: v.scheduledAt.toISOString(), checkedIn: !!v.checkedInAt, day,
+      });
+      continue;
+    }
     // A job whose work is finished has no visit left to make.
-    if (isComplaint ? DONE.includes(v.complaint!.status) : v.installationChallan && v.installationChallan.status !== 'pending') continue;
-    if (!isComplaint && !v.installationChallan) continue;
+    if (isComplaint ? DONE.includes(v.complaint!.status) : v.installationChallan && (v.installationChallan.isInvoiced || !['pending', 'rejected'].includes(v.installationChallan.status))) continue;
     schedule.push({
       id: v.id, kind: isComplaint ? 'complaint' : 'installation',
       jobId: (isComplaint ? v.complaintId : v.installationChallanId)!,
       no: isComplaint ? v.complaint!.complaintNo : v.installationChallan!.challanNo,
       customerName: isComplaint
         ? person(v.complaint!.customer)
-        : v.installationChallan!.salesOrder?.organizationName || v.installationChallan!.salesOrder?.customerName || 'No customer on the challan',
-      siteLocation: isComplaint ? v.complaint!.siteLocation : (v.installationChallan!.siteLocation ?? v.installationChallan!.salesOrder?.shippingAddress ?? null),
+        : (v.installationChallan!.customer ? person(v.installationChallan!.customer) : null)
+          || v.installationChallan!.salesOrder?.organizationName || v.installationChallan!.salesOrder?.customerName || 'No customer on the challan',
+      siteLocation: isComplaint ? v.complaint!.siteLocation : (v.installationChallan!.siteLocation ?? v.installationChallan!.salesOrder?.shippingAddress ?? v.siteAddress ?? null),
       purpose: v.purpose, scheduledAt: v.scheduledAt.toISOString(), checkedIn: !!v.checkedInAt, day,
     });
   }

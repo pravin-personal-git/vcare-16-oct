@@ -24,7 +24,12 @@
 
 import type { IconName } from '@/components/ui/Icon';
 
-export type VisitSubject = 'complaint' | 'installation';
+/**
+ * `customer` (27 Oct 2026): a survey happens before anything is sold, so it
+ * is booked against the customer - an installation challan can be linked,
+ * never required. It still counts as installation work in the lists.
+ */
+export type VisitSubject = 'complaint' | 'installation' | 'customer';
 
 export interface VisitReason {
   key: string;
@@ -48,8 +53,8 @@ export const VISIT_REASONS: VisitReason[] = [
   {
     key: 'installation_survey',
     label: 'Survey before installing',
-    hint: 'Going to look at the site and measure up before the fitting date.',
-    subject: 'installation',
+    hint: 'Going to look at the site before anything is sold - any customer, no challan needed.',
+    subject: 'customer',
     icon: 'map-pin',
   },
   {
@@ -108,6 +113,6 @@ export const visitReasonLabel = (key: string): string =>
 
 export const VISIT_REASON_KEYS = VISIT_REASONS.map((r) => r.key);
 
-/** The reasons that go with a given subject, for the form's picker. */
+/** The reasons that go with a given subject, for the form's picker. A survey is installation work. */
 export const reasonsFor = (subject: VisitSubject): VisitReason[] =>
-  VISIT_REASONS.filter((r) => r.subject === subject);
+  VISIT_REASONS.filter((r) => r.subject === subject || (subject === 'installation' && r.subject === 'customer'));

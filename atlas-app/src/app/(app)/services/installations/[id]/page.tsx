@@ -10,9 +10,9 @@ import { InstallationView } from './InstallationView';
 
 /**
  * ONE INSTALLATION (11 Oct 2026, Pravin: "give them individual and detailed
- * pages, exact same layout as the complaints page"). Worked like a complaint -
- * stage, technicians, visits with check-in, the units fitted - but built for
- * new fitting: site survey, material used, testing, handover. No faulty parts.
+ * pages, exact same layout as the complaints page"). Rebuilt like a complaint
+ * on 27 Oct 2026: stages that move by themselves, items editable until
+ * billed, material only through the Parts card, Bill this installation.
  */
 export default async function InstallationPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -35,6 +35,7 @@ export default async function InstallationPage({ params }: { params: Promise<{ i
       data={data}
       files={files}
       canEdit={canEdit}
+      canBill={ctx.permissions.has('invoice.create') && ctx.scope.kind === 'single'}
       parts={{
         challans: challans.map((c) => ({ ...c, createdAt: c.createdAt.toISOString() })),
         catalogue,

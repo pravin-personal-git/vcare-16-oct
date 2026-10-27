@@ -407,10 +407,10 @@ model MobileRefreshToken {
   tokenHash   String  @unique
   deviceLabel String? // "Priya's Redmi" - from the phone's own device name
 
-  createdAt  DateTime  @default(now())
-  lastUsedAt DateTime?
-  expiresAt  DateTime // sliding window - extended on every successful /refresh
-  revokedAt  DateTime?
+  createdAt    DateTime  @default(now())
+  lastUsedAt   DateTime?
+  expiresAt    DateTime // sliding window - extended on every successful /refresh
+  revokedAt    DateTime?
   /// Set when /refresh rotated this token; the id of the token that replaced
   /// it. A logout or a revoke leaves it empty. Lets a phone whose /refresh
   /// reply was lost on a weak signal retry with the old token (15 Oct 2026).
@@ -433,10 +433,10 @@ model PartyRefreshToken {
   tokenHash   String  @unique
   deviceLabel String?
 
-  createdAt  DateTime  @default(now())
-  lastUsedAt DateTime?
-  expiresAt  DateTime
-  revokedAt  DateTime?
+  createdAt    DateTime  @default(now())
+  lastUsedAt   DateTime?
+  expiresAt    DateTime
+  revokedAt    DateTime?
   replacedById String? // see MobileRefreshToken.replacedById
 
   @@index([partyId])
@@ -472,10 +472,10 @@ model OtpCode {
 
 model Store {
   /// Shop reviews and wishlists (5 Oct 2026).
-  productReviews ProductReview[]
-  shopWishlists  ShopWishlist[]
+  productReviews        ProductReview[]
+  shopWishlists         ShopWishlist[]
   /// Site visits, which now carry their own store (7 Oct 2026).
-  serviceVisits  ServiceVisit[]
+  serviceVisits         ServiceVisit[]
   jobSettings           JobSettings?
   incentiveSettings     IncentiveSettings?
   travelSettings        TravelSettings?
@@ -703,15 +703,15 @@ model Store {
   /// F2: nothing is removed without a name against it (AGENTS.md §4).
   deletedBy    String?
 
-  @@unique([organizationId, branchCode])
-  @@index([organizationId])
-  @@index([legalEntityId])
-
   /// The public shop (3 Oct 2026).
   catalogueListings CatalogueListing[]
   catalogueCombos   CatalogueCombo[]
   catalogueEvents   CatalogueEvent[]
   carts             Cart[]
+
+  @@unique([organizationId, branchCode])
+  @@index([organizationId])
+  @@index([legalEntityId])
 }
 
 // ---------------------------------------------------------------- IDENTITY
@@ -884,11 +884,11 @@ model User {
   /// F2: nothing is removed without a name against it (AGENTS.md §4).
   deletedBy    String?
 
-  @@index([organizationId])
-  @@index([reportsToId])
-
   /// Vans this person holds stock in (2 Oct 2026).
   vans Warehouse[] @relation("VanHolder")
+
+  @@index([organizationId])
+  @@index([reportsToId])
 }
 
 /// A dated history of who reported to whom, in what designation, at which
@@ -2009,6 +2009,11 @@ model Product {
   /// F2: nothing is removed without a name against it (AGENTS.md §4).
   deletedBy    String?
 
+  /// How this product appears in the shop, and the bundles it belongs to
+  /// (3 Oct 2026).
+  catalogueListing CatalogueListing?
+  catalogueCombos  CatalogueComboItem[]
+
   @@unique([storeId, productCode])
   @@index([storeId, isActive])
   @@index([storeId, categoryId])
@@ -2016,11 +2021,6 @@ model Product {
   @@index([storeId, trackingMode])
   @@index([storeId, tracksExpiry])
   @@index([barcode])
-
-  /// How this product appears in the shop, and the bundles it belongs to
-  /// (3 Oct 2026).
-  catalogueListing  CatalogueListing?
-  catalogueCombos   CatalogueComboItem[]
 }
 
 /// What we last paid for a product.
@@ -2168,9 +2168,9 @@ model CustomerType {
 model Party {
   /// Reviews this customer wrote on the shop (5 Oct 2026).
   productReviews ProductReview[]
-  id        String @id @default(cuid())
-  storeId   String
-  partyCode String
+  id             String          @id @default(cuid())
+  storeId        String
+  partyCode      String
 
   /// Owner-defined extra fields, keyed by `EntityFieldConfig.fieldKey`.
   customFields Json?
@@ -2302,8 +2302,8 @@ model Party {
   sites              PartySite[]
   rmaAsCustomer      ReplacementCase[]   @relation("RmaCustomer")
   rmaAsSupplier      ReplacementCase[]   @relation("RmaSupplier")
-  supplierDispatches SupplierDispatch[] @relation("DispatchSupplier")
-  rmaReceipts        RmaReceipt[]       @relation("RmaReceiptSupplier")
+  supplierDispatches SupplierDispatch[]  @relation("DispatchSupplier")
+  rmaReceipts        RmaReceipt[]        @relation("RmaReceiptSupplier")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -2317,6 +2317,9 @@ model Party {
   deletedAt    DateTime?
   /// F2: nothing is removed without a name against it (AGENTS.md §4).
   deletedBy    String?
+
+  surveyVisits         ServiceVisit[]        @relation("ServiceVisitCustomer")
+  installationChallans InstallationChallan[] @relation("InstallationChallanCustomer")
 
   @@unique([storeId, partyCode])
   @@index([storeId, isCustomer])
@@ -2491,13 +2494,13 @@ model Lead {
   /// F2: nothing is removed without a name against it (AGENTS.md §4).
   deletedBy    String?
 
+  /// The basket this lead came from, where it came from one (3 Oct 2026).
+  carts Cart[]
+
   @@unique([storeId, leadCode])
   @@index([storeId, isClosed])
   @@index([storeId, stageId])
   @@index([storeId, mobile])
-
-  /// The basket this lead came from, where it came from one (3 Oct 2026).
-  carts Cart[]
 }
 
 model LeadTag {
@@ -4306,6 +4309,12 @@ model Complaint {
   /// F2: nothing is removed without a name against it (AGENTS.md §4).
   deletedBy    String?
 
+  /// Invoices that billed this job (2 Oct 2026).
+  invoiceSources InvoiceSource[] @relation("InvoiceSourceJob")
+
+  /// The basket this service request came from (3 Oct 2026).
+  carts Cart[] @relation("CartComplaint")
+
   @@unique([storeId, complaintNo])
   @@index([storeId, status])
   @@index([storeId, customerId])
@@ -4313,12 +4322,6 @@ model Complaint {
   @@index([storeId, ownerId])
   @@index([storeId, legacyRef])
   @@index([storeId, createdAt])
-
-  /// Invoices that billed this job (2 Oct 2026).
-  invoiceSources InvoiceSource[] @relation("InvoiceSourceJob")
-
-  /// The basket this service request came from (3 Oct 2026).
-  carts Cart[] @relation("CartComplaint")
 }
 
 /// The complaint's own history - the "Complaint Tracker" page is this table,
@@ -4391,6 +4394,17 @@ model ServiceVisit {
   /// not an appointment with the customer, and a new installation needs one.
   installationChallanId String?
   installationChallan   InstallationChallan? @relation(fields: [installationChallanId], references: [id], onDelete: Cascade)
+
+  /// A SURVEY BEFORE ANYTHING IS SOLD (27 Oct 2026, Vcare).
+  ///
+  /// A survey happens before there is a challan, so it hangs off the customer
+  /// alone. The CHECK allows a visit with only a customer for the survey
+  /// reason and nothing else. When a challan is raised from the survey, the
+  /// visit gets that challan too.
+  customerId  String?
+  customer    Party?  @relation("ServiceVisitCustomer", fields: [customerId], references: [id], onDelete: SetNull)
+  /// Where to go, when there is no complaint or challan to borrow a site from.
+  siteAddress String?
 
   technicianId String
   technician   User   @relation("ServiceVisitTechnician", fields: [technicianId], references: [id])
@@ -4467,6 +4481,7 @@ model ServiceVisit {
   @@index([amcContractId])
   @@index([installationChallanId])
   @@index([storeId, scheduledAt])
+  @@index([customerId])
 }
 
 /// The "Repair Tracker" page's own table: stock that physically left the
@@ -4629,6 +4644,17 @@ model InstallationChallan {
   salesOrderId String?
   salesOrder   SalesOrder? @relation(fields: [salesOrderId], references: [id])
 
+  /// THE CUSTOMER, ON THE CHALLAN ITSELF (27 Oct 2026, Vcare redesign).
+  ///
+  /// The challan used to borrow its customer from the sales order, so one
+  /// raised without an order had no customer, phone or address. Required by
+  /// the raise form now; filled from the order for the challans before it.
+  customerId String?
+  customer   Party?  @relation("InstallationChallanCustomer", fields: [customerId], references: [id])
+
+  /// "Don't bill" (27 Oct 2026): why the office closed the job without a bill.
+  notBilledReason String?
+
   /// Same vocabulary as `RepairChallan.status`, deliberately - one word means
   /// one thing across both challan types, and the UI can share a badge.
   /// pending | work_done | approved | rejected | legacy_unknown
@@ -4659,10 +4685,11 @@ model InstallationChallan {
   siteLat      Decimal? @db.Decimal(9, 6)
   siteLng      Decimal? @db.Decimal(9, 6)
 
-  /// The working stage (11 Oct 2026): planned | survey | material_ready |
-  /// installing | testing | handover | approved. `status` stays the office's
-  /// approval loop (pending -> work_done -> approved | rejected).
-  stage         String    @default("planned")
+  /// The working stage, moved by what happens (27 Oct 2026): raised |
+  /// technician | visit | fitting | work_done | billed - see
+  /// lib/installation-stages `deriveStage`. `status` stays what the phone
+  /// reads (pending -> work_done -> approved | rejected); billing closes it.
+  stage         String    @default("raised")
   priority      String    @default("normal")
   /// Site survey checklist + estimated cable, filled on the first visit.
   surveyJson    Json?
@@ -4679,8 +4706,8 @@ model InstallationChallan {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  items     InstallationChallanItem[]
-  assignees InstallationChallanAssignee[]
+  items       InstallationChallanItem[]
+  assignees   InstallationChallanAssignee[]
   /// Material challans for cable, clamps and the like that are not on the
   /// order (22 Oct 2026, R3) - the complaint's challan engine, raised here.
   jobChallans JobChallan[]
@@ -4716,6 +4743,7 @@ model InstallationChallan {
   @@index([storeId, salesOrderId])
   @@index([storeId, legacyRef])
   @@index([storeId, physicalChallanNo])
+  @@index([storeId, customerId])
 }
 
 /// One product line on an installation challan.
@@ -4734,16 +4762,16 @@ model InstallationChallanItem {
   challanId String
   challan   InstallationChallan @relation(fields: [challanId], references: [id], onDelete: Cascade)
 
-  productId   String?
-  product     Product? @relation(fields: [productId], references: [id])
+  productId        String?
+  product          Product? @relation(fields: [productId], references: [id])
   /// Denormalised, as on every other document line in this schema: what the
   /// product was called on the day it was dispatched, which is not
   /// necessarily what the catalogue calls it now.
-  productName String
-  barcode     String?
-  qty         Int      @default(1)
-  unit        String?
-  srNo        Int      @default(1)
+  productName      String
+  barcode          String?
+  qty              Int      @default(1)
+  unit             String?
+  srNo             Int      @default(1)
   /// The order line this fits - one line belongs to one installation (11 Oct 2026).
   salesOrderItemId String?
   /// Where on site it goes ("Main gate").
@@ -4751,7 +4779,7 @@ model InstallationChallanItem {
   /// Serial scanned on site.
   serialNo         String?
   /// to_fit | fitted | tested
-  fitStatus        String  @default("to_fit")
+  fitStatus        String   @default("to_fit")
 
   /// UNUSED, COMING BACK (22 Oct 2026, R2). The technician says how many are
   /// coming back - a request only; stock moves when the store receives them,
@@ -5396,12 +5424,6 @@ model SalesOrder {
   /// F2: nothing is removed without a name against it (AGENTS.md §4).
   deletedBy    String?
 
-  @@unique([storeId, orderNo])
-  @@index([storeId, fulfilmentStatus])
-  @@index([storeId, paymentStatus])
-  @@index([storeId, orderDate])
-  @@index([storeId, legacyRef])
-
   /// Invoices this order contributes to (2 Oct 2026). `invoiceId` above is
   /// still the one invoice it converted into, where it did; these are every
   /// invoice that billed any of its work, including consolidated ones.
@@ -5409,7 +5431,13 @@ model SalesOrder {
   invoiceLines   InvoiceItemSource[] @relation("InvoiceLineOrder")
 
   /// Advances collected against this order (2 Oct 2026).
-  receipts       Receipt[]
+  receipts Receipt[]
+
+  @@unique([storeId, orderNo])
+  @@index([storeId, fulfilmentStatus])
+  @@index([storeId, paymentStatus])
+  @@index([storeId, orderDate])
+  @@index([storeId, legacyRef])
 }
 
 model SalesOrderItem {
@@ -5675,10 +5703,10 @@ model InvoiceItem {
   deletedBy    String?
   updatedAt    DateTime  @updatedAt
 
-  @@index([invoiceId])
-
   /// Which document each charge on this line came from (2 Oct 2026).
   sources InvoiceItemSource[]
+
+  @@index([invoiceId])
 }
 
 /// WHAT ONE INVOICE BILLS. Added 2 Oct 2026.
@@ -5712,11 +5740,11 @@ model InvoiceSource {
   kind String
 
   salesOrderId String?
-  salesOrder   SalesOrder? @relation("InvoiceSourceOrder", fields: [salesOrderId], references: [id])
+  salesOrder   SalesOrder?          @relation("InvoiceSourceOrder", fields: [salesOrderId], references: [id])
   challanId    String?
   challan      InstallationChallan? @relation("InvoiceSourceChallan", fields: [challanId], references: [id])
   complaintId  String?
-  complaint    Complaint?  @relation("InvoiceSourceJob", fields: [complaintId], references: [id])
+  complaint    Complaint?           @relation("InvoiceSourceJob", fields: [complaintId], references: [id])
 
   /// The document number AS IT READ when the invoice was raised, for the same
   /// reason the buyer name is snapshotted onto the invoice: a tax document
@@ -5774,13 +5802,13 @@ model InvoiceItemSource {
   kind String
 
   challanId        String?
-  challan          InstallationChallan? @relation("InvoiceLineChallan", fields: [challanId], references: [id])
+  challan          InstallationChallan?     @relation("InvoiceLineChallan", fields: [challanId], references: [id])
   challanItemId    String?
   challanItem      InstallationChallanItem? @relation(fields: [challanItemId], references: [id])
   salesOrderId     String?
-  salesOrder       SalesOrder?     @relation("InvoiceLineOrder", fields: [salesOrderId], references: [id])
+  salesOrder       SalesOrder?              @relation("InvoiceLineOrder", fields: [salesOrderId], references: [id])
   salesOrderItemId String?
-  salesOrderItem   SalesOrderItem? @relation(fields: [salesOrderItemId], references: [id])
+  salesOrderItem   SalesOrderItem?          @relation(fields: [salesOrderItemId], references: [id])
 
   /// Billed from this document. See the note above on why it is stored.
   qty Int
@@ -5899,7 +5927,7 @@ model Receipt {
   /// invoice - that is `ReceiptAllocation`, and it stays the only thing that
   /// decides what a receipt settles.
   salesOrderId String?
-  salesOrder   SalesOrder? @relation(fields: [salesOrderId], references: [id])
+  salesOrder   SalesOrder?          @relation(fields: [salesOrderId], references: [id])
   challanId    String?
   challan      InstallationChallan? @relation(fields: [challanId], references: [id])
 
@@ -7618,7 +7646,7 @@ model StockUnit {
   /// supplier's new serial, or a unit from our stock given in place of one the
   /// supplier kept, is covered in full from the day it is handed over
   /// (decision 4). Null - the normal case - counts from the sale or install.
-  warrantyFrom DateTime?
+  warrantyFrom   DateTime?
 
   /// Values for this store's `StockFieldConfig` fields, keyed by `fieldKey`.
   customFields Json?
@@ -7626,13 +7654,13 @@ model StockUnit {
   legacyRef String?
   note      String?
 
-  events       StockUnitEvent[]
-  movements    StockMovement[]
-  challanItems InstallationChallanItem[]
-  replacements ReplacementCase[]
+  events         StockUnitEvent[]
+  movements      StockMovement[]
+  challanItems   InstallationChallanItem[]
+  replacements   ReplacementCase[]
   complaintItems ComplaintItem[]
   /// Cases this unit was the supplier's new serial for (stage 5).
-  replacedFor  ReplacementCase[] @relation("RmaReplacementUnit")
+  replacedFor    ReplacementCase[]         @relation("RmaReplacementUnit")
 
   createdBy String?
   createdAt DateTime @default(now())
@@ -7648,13 +7676,6 @@ model StockUnit {
   /// F2: nothing is removed without a name against it (AGENTS.md §4).
   deletedBy    String?
 
-  @@unique([storeId, productId, serialNo])
-  @@index([storeId, serialNo])
-  @@index([storeId, status])
-  @@index([storeId, productId, status])
-  @@index([storeId, identitySource])
-  @@index([partyId])
-
   /// WHERE THIS ITEM PHYSICALLY IS. Added 2 Oct 2026.
   ///
   /// `status` says what has become of a unit - on the shelf, with a customer,
@@ -7668,6 +7689,13 @@ model StockUnit {
   /// `StockMovement` already use for a store with no warehouses configured.
   warehouseId String?
   warehouse   Warehouse? @relation(fields: [warehouseId], references: [id])
+
+  @@unique([storeId, productId, serialNo])
+  @@index([storeId, serialNo])
+  @@index([storeId, status])
+  @@index([storeId, productId, status])
+  @@index([storeId, identitySource])
+  @@index([partyId])
 }
 
 /// Everything that ever happened to a unit, append-only. The unit row says
@@ -8509,7 +8537,7 @@ model Transaction {
   /// vehicle, a meter reading. Defined per branch at Settings > Custom
   /// Fields > Office expenses, the same mechanism customers, leads and
   /// products already use. `{}` when none are set up.
-  customFields   Json      @default("{}")
+  customFields Json @default("{}")
 
   /// Who the cash was actually handed to (8 Oct 2026), for a petty-cash
   /// expense: the person who took ₹120 for chai, or the technician who took
@@ -8520,7 +8548,7 @@ model Transaction {
   /// and the person does not become a debtor. That distinction is the whole
   /// point: the money was spent BY them, not LENT to them. Not a relation,
   /// same as `createdBy`/`approvedBy` on this table.
-  paidToUserId   String?
+  paidToUserId String?
 
   /// pending | approved | rejected | reversed.
   ///
@@ -8587,14 +8615,14 @@ model CatalogueListing {
   /// What customers wrote about it, and who saved it for later (5 Oct 2026).
   reviews   ProductReview[]
   wishlists ShopWishlist[]
-  id        String  @id @default(cuid())
+  id        String          @id @default(cuid())
   storeId   String
-  store     Store   @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  store     Store           @relation(fields: [storeId], references: [id], onDelete: Cascade)
   /// Unique on its own, not just within the store. A product belongs to exactly
   /// one store, so a per-store unique would be the same constraint written
   /// twice - and Prisma needs the plain one anyway to see this as one-to-one.
-  productId String  @unique
-  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  productId String          @unique
+  product   Product         @relation(fields: [productId], references: [id], onDelete: Cascade)
 
   /// Shown to the public, or held back while somebody writes the copy.
   isListed Boolean @default(false)
@@ -9890,11 +9918,11 @@ model StaffLoan {
   /// Before this an advance had nowhere to live except a bare
   /// `StaffTransaction`, which nothing ever recovered. Raised here, it is
   /// collected by the same payslip EMI as a loan.
-  kind    String @default("loan")
+  kind String @default("loan")
 
   /// `LN-BR001-2026-0007` or `ADV-BR001-2026-0011`. Null on rows raised before
   /// numbering existed - the screen falls back to the kind and the date.
-  loanNo  String?
+  loanNo String?
 
   userId String
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -10648,13 +10676,13 @@ model ReplacementCase {
   stockUnitId String?
   stockUnit   StockUnit? @relation(fields: [stockUnitId], references: [id], onDelete: SetNull)
 
-  customerId  String?
-  customer    Party?     @relation("RmaCustomer", fields: [customerId], references: [id])
-  complaintId String?
-  complaint   Complaint? @relation(fields: [complaintId], references: [id], onDelete: SetNull)
+  customerId        String?
+  customer          Party?            @relation("RmaCustomer", fields: [customerId], references: [id])
+  complaintId       String?
+  complaint         Complaint?        @relation(fields: [complaintId], references: [id], onDelete: SetNull)
   /// The complaint item this case is the supplier's half of (stage 3, 10 Oct 2026).
-  complaintItemId String?
-  complaintItem   ComplaintItem? @relation(fields: [complaintItemId], references: [id], onDelete: SetNull)
+  complaintItemId   String?
+  complaintItem     ComplaintItem?    @relation(fields: [complaintItemId], references: [id], onDelete: SetNull)
   /// The box it went out in (stage 4, 10 Oct 2026) - one dispatch carries many cases.
   dispatchId        String?
   dispatch          SupplierDispatch? @relation(fields: [dispatchId], references: [id], onDelete: SetNull)
@@ -10670,15 +10698,15 @@ model ReplacementCase {
   supplierAnswerNote String?
   supplierAnswerAt   DateTime?
   /// The RMA receipt it came back on, when something physical came back.
-  receiptId String?
-  receipt   RmaReceipt? @relation(fields: [receiptId], references: [id], onDelete: SetNull)
+  receiptId          String?
+  receipt            RmaReceipt? @relation(fields: [receiptId], references: [id], onDelete: SetNull)
   /// The supplier's new unit, when they sent a new serial for the customer's.
-  replacementUnitId String?
-  replacementUnit   StockUnit? @relation("RmaReplacementUnit", fields: [replacementUnitId], references: [id], onDelete: SetNull)
+  replacementUnitId  String?
+  replacementUnit    StockUnit?  @relation("RmaReplacementUnit", fields: [replacementUnitId], references: [id], onDelete: SetNull)
   /// What closed it with nothing coming back: credit_note | written_reply.
-  closedOn        String?
+  closedOn           String?
   /// The supplier's written reply - their reference and what it said.
-  supplierReplyRef String?
+  supplierReplyRef   String?
 
   supplierId    String?
   supplier      Party?  @relation("RmaSupplier", fields: [supplierId], references: [id])
@@ -11499,28 +11527,28 @@ model SiteOverride {
 /// and cost move at issue, not when the challan is raised. Never shown to
 /// the customer. The old single-line RepairChallan stays for history.
 model JobChallan {
-  id              String           @id @default(cuid())
-  storeId         String
-  challanNo       String
+  id                    String               @id @default(cuid())
+  storeId               String
+  challanNo             String
   /// WHOSE JOB - exactly one of complaintId and installationChallanId (a
   /// database CHECK, like ServiceVisit). An installation's challan carries the
   /// material that is not on the order: cable, clamps, connectors (22 Oct 2026, R3).
-  complaintId     String?
-  complaint       Complaint?       @relation(fields: [complaintId], references: [id], onDelete: Cascade)
+  complaintId           String?
+  complaint             Complaint?           @relation(fields: [complaintId], references: [id], onDelete: Cascade)
   installationChallanId String?
   installationChallan   InstallationChallan? @relation(fields: [installationChallanId], references: [id], onDelete: Cascade)
   /// material | replacement | installation
-  type            String           @default("material")
+  type                  String               @default("material")
   /// pending_approval | approved | rejected | issued
-  status          String           @default("pending_approval")
-  note            String?
-  createdBy       String?
-  createdAt       DateTime         @default(now())
-  approvedBy      String?
-  approvedAt      DateTime?
-  rejectionReason String?
-  lines           JobChallanLine[]
-  issues          MaterialIssue[]
+  status                String               @default("pending_approval")
+  note                  String?
+  createdBy             String?
+  createdAt             DateTime             @default(now())
+  approvedBy            String?
+  approvedAt            DateTime?
+  rejectionReason       String?
+  lines                 JobChallanLine[]
+  issues                MaterialIssue[]
 
   // ---- sync (F2) ----
   /// F2: bumped on every write. What F3 compares - two clocks give two answers, a counter gives one.
@@ -11579,15 +11607,15 @@ model JobChallanLine {
 /// The store's issue of an approved job challan - a numbered GDN. Stock
 /// movements carry refType MaterialIssue.
 model MaterialIssue {
-  id           String     @id @default(cuid())
+  id           String          @id @default(cuid())
   storeId      String
   gdnNo        String
   challanId    String
-  challan      JobChallan @relation(fields: [challanId], references: [id], onDelete: Cascade)
+  challan      JobChallan      @relation(fields: [challanId], references: [id], onDelete: Cascade)
   issuedBy     String?
   /// Complaint items handed back to the customer on this GDN (stage 6).
   handedBack   ComplaintItem[]
-  issuedAt     DateTime   @default(now())
+  issuedAt     DateTime        @default(now())
   /// Cancelled by the store (wrong GDN, 28 Sep 2026): stock and cost were reversed.
   cancelledAt  DateTime?
   cancelledBy  String?
@@ -12209,10 +12237,10 @@ model ComplaintItem {
   ours Boolean @default(true)
 
   /// The exact unit, when it is a serialised one we sold.
-  stockUnitId String?
-  stockUnit   StockUnit? @relation(fields: [stockUnitId], references: [id], onDelete: SetNull)
-  productId   String?
-  product     Product?   @relation(fields: [productId], references: [id])
+  stockUnitId   String?
+  stockUnit     StockUnit? @relation(fields: [stockUnitId], references: [id], onDelete: SetNull)
+  productId     String?
+  product       Product?   @relation(fields: [productId], references: [id])
   /// What it is called on this job - the product name then, or the brand and
   /// model the customer gave for one we did not sell.
   equipmentName String
@@ -12221,11 +12249,11 @@ model ComplaintItem {
   problem       String?
 
   /// The pickup receipt it left the customer's site on (stage 3) - null while it is still there.
-  pickupId String?
-  pickup   ItemPickup? @relation(fields: [pickupId], references: [id], onDelete: SetNull)
+  pickupId         String?
+  pickup           ItemPickup?       @relation(fields: [pickupId], references: [id], onDelete: SetNull)
   /// The GDN it was handed back to the customer on (stage 6).
-  handbackIssueId String?
-  handbackIssue   MaterialIssue? @relation(fields: [handbackIssueId], references: [id], onDelete: SetNull)
+  handbackIssueId  String?
+  handbackIssue    MaterialIssue?    @relation(fields: [handbackIssueId], references: [id], onDelete: SetNull)
   /// Its supplier cases, normally one (stage 3 opens it at pickup).
   replacementCases ReplacementCase[]
 
@@ -12275,19 +12303,19 @@ model ComplaintItem {
 /// was ever collected. The items' units go to `in_repair`: with us, still the
 /// customer's, still on their invoice.
 model ItemPickup {
-  id          String    @id @default(cuid())
-  storeId     String
-  store       Store     @relation(fields: [storeId], references: [id], onDelete: Cascade)
-  complaintId String
-  complaint   Complaint @relation(fields: [complaintId], references: [id], onDelete: Cascade)
-  pickupNo    String
-  pickedUpAt  DateTime  @default(now())
+  id           String          @id @default(cuid())
+  storeId      String
+  store        Store           @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  complaintId  String
+  complaint    Complaint       @relation(fields: [complaintId], references: [id], onDelete: Cascade)
+  pickupNo     String
+  pickedUpAt   DateTime        @default(now())
   /// The staff member who took them.
-  pickedUpBy  String?
+  pickedUpBy   String?
   /// The person at the customer who handed them over.
   handedOverBy String?
-  note        String?
-  items       ComplaintItem[]
+  note         String?
+  items        ComplaintItem[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -12329,24 +12357,24 @@ model SupplierDispatch {
   /// The supplier's own RMA / authorisation number, when they give one.
   supplierRmaNo String?
 
-  courier     String?
-  docketNo    String?
+  courier            String?
+  docketNo           String?
   /// Opened from the screen, never fetched by Atlas.
-  trackingUrl String?
-  courierChargePaise Int     @default(0)
+  trackingUrl        String?
+  courierChargePaise Int      @default(0)
   /// cash | bank | none - how the courier was paid; none posts nothing.
-  courierPaidBy      String  @default("none")
+  courierPaidBy      String   @default("none")
   /// equal | value - how the charge is shared across the cases.
-  chargeSplit        String  @default("equal")
+  chargeSplit        String   @default("equal")
   boxes              Int?
   weightKg           Decimal? @db.Decimal(8, 2)
   /// The courier expense entry, when one was posted.
   journalEntryId     String?
 
-  sentAt         DateTime  @default(now())
+  sentAt         DateTime          @default(now())
   expectedBackAt DateTime?
   /// sent | part_back | back | cancelled - kept in step with its cases.
-  status         String    @default("sent")
+  status         String            @default("sent")
   note           String?
   cases          ReplacementCase[]
   receipts       RmaReceipt[]
@@ -12385,16 +12413,16 @@ model RmaReceipt {
   dispatchId   String?
   dispatch     SupplierDispatch? @relation(fields: [dispatchId], references: [id], onDelete: SetNull)
   supplierId   String?
-  supplier     Party?  @relation("RmaReceiptSupplier", fields: [supplierId], references: [id])
+  supplier     Party?            @relation("RmaReceiptSupplier", fields: [supplierId], references: [id])
   supplierName String?
 
-  receivedAt DateTime @default(now())
+  receivedAt         DateTime          @default(now())
   /// The return courier, when the supplier did not pay for it.
   courier            String?
   docketNo           String?
-  courierChargePaise Int     @default(0)
+  courierChargePaise Int               @default(0)
   /// cash | bank | none
-  courierPaidBy      String  @default("none")
+  courierPaidBy      String            @default("none")
   journalEntryId     String?
   note               String?
   cases              ReplacementCase[]
@@ -12476,7 +12504,7 @@ model DocumentSend {
   templateName String?
 
   /// sent | delivered | read | failed
-  status      String    @default("sent")
+  status      String  @default("sent")
   /// Meta's message id (wamid…) - what the webhook reports against.
   providerRef String?
   error       String?

@@ -22,7 +22,8 @@ import {
 } from '@/lib/rma';
 import type { RmaRow, RmaDetail } from '@/server/rma';
 import { PartyPicker, ErrorNote, field, label, type PartyOption } from '../../stock-units/UnitDialogs';
-import { createRmaAction, moveRmaAction, addRmaNoteAction, loadRmaAction, updateRmaAction, type RmaActionState } from './actions';
+import { createRmaAction, moveRmaAction, addRmaNoteAction, loadRmaAction, updateRmaAction, searchFaultyItemAction, type RmaActionState, type FaultyPick } from './actions';
+import { SearchSelect, type SearchOption } from '@/components/ui/SearchSelect';
 import { istDate } from '@/lib/date-ranges';
 
 const fmt = (d: Date | string | null) =>
@@ -171,7 +172,7 @@ function CreateRmaDialog({
   onClose: () => void;
   onDone: (r: RmaActionState) => void;
 }) {
-  const [productId, setProductId] = useState('');
+  const [pick, setPick] = useState<FaultyPick | null>(null);
   const [productName, setProductName] = useState('');
   const [brandModel, setBrandModel] = useState('');
   const [qty, setQty] = useState('1');
@@ -181,11 +182,25 @@ function CreateRmaDialog({
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const productId = pick?.productId ?? '';
+
+  // A serial pick fills the product, the serial and the customer holding it;
+  // a product pick fills only the product - the serial stays free to type.
+  function choose(o: SearchOption | null) {
+    const f = o as FaultyPick | null;
+    setPick(f && f.kind !== 'none' ? f : null);
+    setProductName(f?.productName ?? '');
+    if (f?.kind === 'unit') {
+      if (f.serialNo) setSerialNo(f.serialNo);
+      if (f.customerId) setCustomerId(f.customerId);
+    }
+  }
 
   async function submit() {
     setBusy(true); setError(null);
     const res = await createRmaAction({
       productId: productId || null,
+      stockUnitId: pick?.kind === 'unit' && pick.serialNo === serialNo.trim() ? pick.stockUnitId ?? null : null,
       productName: productName || products.find((p) => p.id === productId)?.name || '',
       brandModel: brandModel || null, qty: Number(qty) || 0, serialNo: serialNo || null,
       customerId: customerId || null, complaintNo: complaintNo || null, parentCaseId: null, note: note || null,
@@ -201,11 +216,19 @@ function CreateRmaDialog({
       <ErrorNote text={error} />
       <div className="grid gap-3 sm:grid-cols-2">
         <div className="sm:col-span-2">
-          <label htmlFor="rmaclien-f173" className={label}>Product</label>
-          <select id="rmaclien-f173" className={field} value={productId} onChange={(e) => { setProductId(e.target.value); setProductName(products.find((p) => p.id === e.target.value)?.name ?? ''); }}>
-            <option value="">Not in the catalogue - describe it below</option>
-            {products.map((p) => <option key={p.id} value={p.id}>{p.name} ({p.code})</option>)}
-          </select>
+          <label htmlFor="rmaclien-f173" className={label}>Product or serial</label>
+          <div className="flex gap-1.5">
+            <div className="min-w-0 flex-1">
+              <SearchSelect id="rmaclien-f173" value={pick} onChange={choose} search={searchFaultyItemAction}
+                placeholder="Type a product name or code, or a serial…" label="Product or serial" />
+            </div>
+            <ScanButton className="h-9 w-9" title="Scan the serial to find the unit" onScan={async (code) => {
+              setSerialNo(code);
+              const hit = (await searchFaultyItemAction(code)).find((o) => o.kind === 'unit' && o.serialNo?.toLowerCase() === code.trim().toLowerCase());
+              if (hit) choose(hit);
+            }} />
+          </div>
+          {pick?.kind === 'unit' && pick.supplierName && <p className="mt-1 text-xs text-muted-foreground">Bought from {pick.supplierName} - filled on the case when you log it.</p>}
         </div>
         {!productId && (
           <div className="sm:col-span-2">

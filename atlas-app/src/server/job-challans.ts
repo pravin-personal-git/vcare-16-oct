@@ -225,13 +225,13 @@ export async function raiseInstallationChallan(
   const storeId = scopeForWrite(scope);
   const job = await db.installationChallan.findFirst({
     where: { id: installationChallanId, storeId },
-    select: { id: true, stage: true, status: true, assignees: { select: { userId: true } } },
+    select: { id: true, stage: true, status: true, isInvoiced: true, notBilledReason: true, assignees: { select: { userId: true } } },
   });
   if (!job) throw new ComplaintError('That installation is not in your branch.');
-  if (job.status === 'approved' || job.stage === 'approved') throw new ComplaintError('This installation is approved and finished - nothing more goes out on it.');
+  if (job.isInvoiced || job.notBilledReason || job.stage === 'billed') throw new ComplaintError('This installation is billed and finished - nothing more goes out on it.');
   if (actor === 'technician') {
     if (!job.assignees.some((a) => a.userId === userId)) throw new ComplaintError('You are not on this installation\'s team.');
-    if (!(INSTALL_WORK_STAGES as readonly string[]).includes(job.stage)) throw new ComplaintError('Start the work first (stage Survey or later) - material is asked for on site.');
+    if (!(INSTALL_WORK_STAGES as readonly string[]).includes(job.stage)) throw new ComplaintError('Material is asked for while the job is on - this one is at Work done or billed.');
     await assertActionAllowed(storeId, 'raise_challan', 'technician');
   }
   // A replacement takes a customer's old unit out - that is a complaint's job, not a new fitting.
@@ -240,7 +240,7 @@ export async function raiseInstallationChallan(
 }
 
 /** Installation stages in which the technician is working on the site. */
-export const INSTALL_WORK_STAGES = ['survey', 'material_ready', 'installing', 'testing'] as const;
+export const INSTALL_WORK_STAGES = ['technician', 'visit', 'fitting', 'survey', 'material_ready', 'installing', 'testing'] as const;
 
 /** The lines checked, the challan numbered and logged, and sent for approval. */
 async function createChallan(
@@ -376,8 +376,8 @@ async function loadForChange(scope: StoreScope, id: string, on: OnJob, userId: s
   if (!allowed.includes(c.status)) throw new ComplaintError(`${c.challanNo} is ${c.status.replace('_', ' ')} - it can no longer be ${what}.`);
   if (actor === 'technician' && c.createdBy !== userId) throw new ComplaintError('Only the person who raised this challan can change it from the phone - ask the office.');
   if (c.complaint && ['closed', 'cancelled'].includes(c.complaint.status)) throw new ComplaintError('This job is finished - reopen it first.');
-  if (c.installationChallan && (c.installationChallan.status === 'approved' || c.installationChallan.stage === 'approved')) {
-    throw new ComplaintError('This installation is approved and finished - its challans stay as they are.');
+  if (c.installationChallan && c.installationChallan.stage === 'billed') {
+    throw new ComplaintError('This installation is billed and finished - its challans stay as they are.');
   }
   return c;
 }

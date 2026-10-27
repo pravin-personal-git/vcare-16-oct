@@ -88,7 +88,8 @@ export function sortWork(rows: WorkRow[]): WorkRow[] {
 }
 
 export interface ScheduleVisit {
-  id: string; kind: WorkKind; jobId: string; no: string; customerName: string; siteLocation: string | null;
+  /** `survey`: a survey booked against the customer alone - jobId is the visit's own id (27 Oct 2026). */
+  id: string; kind: WorkKind | 'survey'; jobId: string; no: string; customerName: string; siteLocation: string | null;
   purpose: string; scheduledAt: string; checkedIn: boolean; day: 'earlier' | 'today' | 'tomorrow';
 }
 

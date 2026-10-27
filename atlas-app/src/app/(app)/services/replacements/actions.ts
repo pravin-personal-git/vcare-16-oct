@@ -3,10 +3,12 @@
 import { revalidatePath } from 'next/cache';
 import { requireContext } from '@/server/context';
 import {
-  createRmaCase, moveRmaCase, addRmaNote, getRmaCase, updateRmaCase, RmaError, type CreateRmaInput, type EditRmaInput,
+  createRmaCase, moveRmaCase, addRmaNote, getRmaCase, updateRmaCase, purchaseOrigin, RmaError, type CreateRmaInput, type EditRmaInput,
 } from '@/server/rma';
 import { StockUnitError } from '@/server/stock-units';
 import { friendlyError } from '@/lib/friendly-error';
+import { db } from '@/server/db';
+import { scopeWhere } from '@/server/store-scope';
 
 export interface RmaActionState { ok?: boolean; error?: string; message?: string; id?: string }
 
@@ -72,4 +74,66 @@ export async function loadRmaAction(id: string) {
   } catch (err) {
     return { error: err instanceof Error ? err.message : 'Could not load the case.' };
   }
+}
+
+/** A pick in "Log a faulty item": a serial on file, a product, or "not in the catalogue". */
+export interface FaultyPick {
+  id: string; label: string; sub?: string | null;
+  kind: 'unit' | 'product' | 'none';
+  productId: string | null; productName: string;
+  stockUnitId?: string; serialNo?: string;
+  customerId?: string | null; supplierName?: string | null;
+}
+
+/**
+ * One box for "Log a faulty item" (27 Oct 2026): type a product name or code,
+ * or type / scan a serial. Serials on file come first - a serial pick fills the
+ * product, the customer holding it and who it was bought from - then products,
+ * then "not in the catalogue". Branch-scoped, best 20.
+ */
+export async function searchFaultyItemAction(q: string): Promise<FaultyPick[]> {
+  const ctx = await requireContext();
+  const s = q.trim();
+  const like = { contains: s, mode: 'insensitive' as const };
+  const where = { ...scopeWhere(ctx.scope) };
+  const [units, products] = await Promise.all([
+    s.length >= 3
+      ? db.stockUnit.findMany({
+        where: { ...where, serialNo: like },
+        select: {
+          id: true, serialNo: true, status: true, storeId: true,
+          product: { select: { id: true, productName: true, productCode: true } },
+          party: { select: { id: true, isCustomer: true, firstName: true, lastName: true, companyName: true } },
+        },
+        orderBy: { updatedAt: 'desc' },
+        take: 6,
+      })
+      : Promise.resolve([]),
+    db.product.findMany({
+      where: { ...where, isActive: true, kind: 'goods', ...(s ? { OR: [{ productName: like }, { productCode: like }] } : {}) },
+      select: { id: true, productName: true, productCode: true },
+      orderBy: { productName: 'asc' },
+      take: 20,
+    }),
+  ]);
+  const origins = await Promise.all(units.map((u) => purchaseOrigin(u.storeId, u.id, null).catch(() => null)));
+  const name = (p: { firstName: string | null; lastName: string | null; companyName: string | null }) =>
+    p.companyName?.trim() || [p.firstName, p.lastName].filter(Boolean).join(' ');
+  const out: FaultyPick[] = units.map((u, i) => {
+    const holder = u.party && u.party.isCustomer ? u.party : null;
+    const from = origins[i]?.exact ? origins[i]!.supplierName : null;
+    return {
+      id: `u:${u.id}`, kind: 'unit',
+      label: `${u.serialNo} - ${u.product.productName}`,
+      sub: ['Serial on file', holder ? `with ${name(holder)}` : u.status.replace(/_/g, ' '), from ? `bought from ${from}` : null].filter(Boolean).join(' · '),
+      productId: u.product.id, productName: u.product.productName,
+      stockUnitId: u.id, serialNo: u.serialNo ?? undefined,
+      customerId: holder?.id ?? null, supplierName: from,
+    };
+  });
+  for (const p of products) {
+    out.push({ id: `p:${p.id}`, kind: 'product', label: p.productName, sub: p.productCode, productId: p.id, productName: p.productName });
+  }
+  out.push({ id: 'none', kind: 'none', label: 'Not in the catalogue - describe it below', sub: null, productId: null, productName: '' });
+  return out;
 }

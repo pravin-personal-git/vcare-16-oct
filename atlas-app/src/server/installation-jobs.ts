@@ -133,7 +133,8 @@ export async function createInstallationJob(
   const challan = await db.installationChallan.update({
     where: { id },
     data: {
-      siteLocation: [site?.name, site?.address, input.siteNote?.trim()].filter(Boolean).join(' - ') || null,
+      // Nothing chosen keeps the order's shipping address the challan was raised with.
+      siteLocation: [site?.name, site?.address, input.siteNote?.trim()].filter(Boolean).join(' - ') || undefined,
       siteLat: where?.lat ?? null, siteLng: where?.lng ?? null,
     },
     select: { challanNo: true },

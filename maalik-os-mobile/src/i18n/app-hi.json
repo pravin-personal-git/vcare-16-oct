@@ -706,5 +706,13 @@
   "Clear search": "खोज साफ़ करें",
   "Remove this item": "यह आइटम हटाएँ",
   "One less": "एक कम",
-  "This file is too large to send (the limit is 4 MB).": "यह फ़ाइल भेजने के लिए बहुत बड़ी है (सीमा 4 MB है)।"
+  "This file is too large to send (the limit is 4 MB).": "यह फ़ाइल भेजने के लिए बहुत बड़ी है (सीमा 4 MB है)।",
+  "Survey before installing": "इंस्टॉल से पहले सर्वे",
+  "Received by (optional)": "किसने लिया (वैकल्पिक)",
+  "The customer's name": "ग्राहक का नाम",
+  "Work done marks every item fitted and starts the warranty today.": "काम हो गया से हर आइटम लगा हुआ माना जाएगा और वारंटी आज से शुरू होगी।",
+  "Billed": "बिल बना",
+  "Raised": "बना",
+  "Fitting": "फिटिंग",
+  "Work done": "काम हो गया"
 }

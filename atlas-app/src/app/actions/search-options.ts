@@ -98,14 +98,16 @@ export async function searchOpenInstallationsAction(q: string): Promise<SearchOp
   const rows = await db.installationChallan.findMany({
     where: {
       ...scopeWhere(ctx.scope),
-      status: { not: 'approved' },
+      status: { not: 'approved' }, isInvoiced: false, notBilledReason: null,
       ...(s ? { OR: [
         { challanNo: like(s) }, { legacyRef: like(s) }, { physicalChallanNo: like(s) },
         { salesOrder: { OR: [{ orderNo: like(s) }, { customerName: like(s) }, { phone: { contains: s } }] } },
+        { customer: { OR: [{ firstName: like(s) }, { lastName: like(s) }, { companyName: like(s) }, { phone: { contains: s } }] } },
       ] } : {}),
     },
     select: {
       id: true, challanNo: true, dispatchedAt: true,
+      customer: { select: { firstName: true, lastName: true, companyName: true, phone: true } },
       salesOrder: { select: { customerName: true, phone: true } },
       _count: { select: { items: true } },
     },
@@ -116,8 +118,8 @@ export async function searchOpenInstallationsAction(q: string): Promise<SearchOp
     id: c.id,
     label: c.challanNo,
     sub: [
-      c.salesOrder?.customerName ?? 'No order on the challan',
-      c.salesOrder?.phone,
+      (c.customer && (c.customer.companyName || [c.customer.firstName, c.customer.lastName].filter(Boolean).join(' '))) || c.salesOrder?.customerName || 'No customer on the challan',
+      c.customer?.phone ?? c.salesOrder?.phone,
       `${c._count.items} item${c._count.items === 1 ? '' : 's'}`,
     ].filter(Boolean).join(' · '),
   }));
@@ -168,4 +170,83 @@ export async function saveTermsTemplateAction(name: string, body: string) {
     if (e instanceof Error && /All Company/.test(e.message)) return { error: 'Pick a branch first - templates belong to a branch.' };
     throw e;
   }
+}
+
+/** A customer for the pickers, with the address the form fills the site from. */
+export interface CustomerPick extends SearchOption { address: string | null }
+
+/** Customers with their address - the survey and installation pickers (27 Oct 2026). */
+export async function searchCustomersWithAddressAction(q: string): Promise<CustomerPick[]> {
+  const ctx = await requireContext();
+  const s = q.trim();
+  const rows = await db.party.findMany({
+    where: {
+      ...scopeWhere(ctx.scope), isCustomer: true, status: 'active',
+      ...(s ? { OR: [{ firstName: like(s) }, { lastName: like(s) }, { companyName: like(s) }, { phone: { contains: s } }, { partyCode: like(s) }] } : {}),
+    },
+    select: { id: true, firstName: true, lastName: true, companyName: true, phone: true, city: true, addressLine1: true, partyCode: true },
+    orderBy: { firstName: 'asc' },
+    take: TAKE,
+  });
+  return rows.map((c) => ({
+    id: c.id,
+    label: c.companyName || [c.firstName, c.lastName].filter(Boolean).join(' '),
+    sub: [c.phone, c.partyCode, c.city].filter(Boolean).join(' · '),
+    address: c.addressLine1,
+  }));
+}
+
+/**
+ * A new customer from a picker, in three fields (27 Oct 2026, Vcare): a survey
+ * or a fitting is often for somebody not on file yet. Same phone already on
+ * file: that customer is used instead of a second record.
+ */
+export async function quickAddCustomerAction(input: { name: string; phone: string; address: string | null }): Promise<{ error?: string; customer?: CustomerPick }> {
+  const ctx = await requireContext();
+  if (!ctx.permissions.has('customers.create')) return { error: 'You do not have permission to add customers.' };
+  if (ctx.scope.kind !== 'single') return { error: 'Select a single branch first.' };
+  const name = input.name.trim();
+  const phone = input.phone.replace(/\D/g, '').slice(-10);
+  if (!name) return { error: 'Type the customer’s name.' };
+  if (phone.length !== 10) return { error: 'Type a 10-digit phone number.' };
+  const pick = (p: { id: string; firstName: string; lastName: string | null; companyName: string | null; phone: string; addressLine1: string | null }) => ({
+    id: p.id, label: p.companyName || [p.firstName, p.lastName].filter(Boolean).join(' '), sub: p.phone, address: p.addressLine1,
+  });
+  const existing = await db.party.findFirst({
+    where: { ...scopeWhere(ctx.scope), isCustomer: true, phone },
+    select: { id: true, firstName: true, lastName: true, companyName: true, phone: true, addressLine1: true },
+  });
+  if (existing) return { customer: pick(existing) };
+  try {
+    const { createParty } = await import('@/server/parties');
+    const [first, ...rest] = name.split(/\s+/);
+    const { party } = await createParty(ctx.scope, {
+      isCustomer: true, isSupplier: false, supplierType: null, paymentTermsDays: 0,
+      companyName: null, gstin: null, title: null, firstName: first ?? name, lastName: rest.join(' ') || null,
+      designation: null, phone, altPhone: null, email: null, website: null, customerTypeId: null, source: null,
+      birthday: null, weddingAnniversary: null, addressLine1: input.address?.trim() || null, state: null, city: null, pincode: null,
+      deliveryAddress: null, deliverySameAsBilling: true, creditLimitPaise: 0, creditLimitDays: 0, subscribeSms: false,
+    });
+    await db.activityLog.create({
+      data: { storeId: party.storeId, userId: ctx.user.id, activityType: 'Create', entityType: 'Party', entityId: party.id, description: `Customer '${name}' added from a picker (${party.partyCode})` },
+    }).catch(() => undefined);
+    return { customer: pick(party) };
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : 'Could not add the customer.' };
+  }
+}
+
+/** A customer's surveys not yet on a challan - "From a survey" on the raise form (27 Oct 2026). */
+export async function customerSurveysAction(customerId: string): Promise<{ id: string; label: string }[]> {
+  const ctx = await requireContext();
+  const rows = await db.serviceVisit.findMany({
+    where: { ...scopeWhere(ctx.scope), customerId, reason: 'installation_survey', installationChallanId: null, status: { not: 'cancelled' } },
+    select: { id: true, scheduledAt: true, status: true, technician: { select: { fullName: true } } },
+    orderBy: { scheduledAt: 'desc' },
+    take: TAKE,
+  });
+  return rows.map((v) => ({
+    id: v.id,
+    label: `Survey ${v.scheduledAt.toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short' })} · ${v.technician.fullName}${v.status === 'completed' ? ' · done' : ''}`,
+  }));
 }

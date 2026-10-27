@@ -11,10 +11,10 @@ import {
 } from '@/server/installation-challans';
 import type { ReceiptMethod } from '@/server/receipts';
 import {
-  addInstallationRemark, decideInstallation, handoverInstallation, saveInstallationChecklist, saveInstallationMaterials,
-  setInstallationStage, setInstallationTeam, updateInstallationItems,
+  addInstallationItem, addInstallationRemark, billInstallation, changeInstallationItemQty, installationBillDraft,
+  markInstallationWorkDone, removeInstallationItem, sendBackInstallation, setInstallationCustomer, setInstallationTeam, updateInstallationItems,
+  waiveInstallationBilling, type InstallationBillDraft,
 } from '@/server/installation-page';
-import type { MaterialRow } from '@/lib/installation-stages';
 import { friendlyError } from '@/lib/friendly-error';
 import { InstallationReturnError, receiveInstallationReturn, requestInstallationReturn } from '@/server/installation-returns';
 import { ComplaintError } from '@/server/complaints';
@@ -80,11 +80,13 @@ export async function updatePaperworkAction(input: PaperSlipInput): Promise<Acti
 
 export async function createInstallationChallanAction(
   input: CreateInstallationChallanInput,
-): Promise<ActionState> {
-  return guard(async () => {
+): Promise<ActionState & { id?: string }> {
+  let id: string | undefined;
+  const r = await guard(async () => {
     const ctx = await requireContext();
-    await createInstallationChallan(ctx.scope, input, ctx.user.id);
+    id = await createInstallationChallan(ctx.scope, input, ctx.user.id);
   });
+  return r.error ? r : { ...r, id };
 }
 
 /** Correct everything on a saved challan (health check SVC-3). */
@@ -166,23 +168,61 @@ async function pageGuard(id: string, run: (ctx: Awaited<ReturnType<typeof requir
   }
 }
 
-export async function installStageAction(id: string, to: string, reason?: string | null): Promise<ActionState> {
-  return pageGuard(id, (ctx) => setInstallationStage(ctx.scope, id, to, ctx.user.id, reason));
+export async function installWorkDoneAction(id: string, receivedBy: string | null): Promise<ActionState> {
+  return pageGuard(id, (ctx) => markInstallationWorkDone(ctx.scope, id, ctx.user.id, receivedBy));
 }
-export async function installHandoverAction(id: string, to: string, note: string | null): Promise<ActionState> {
-  return pageGuard(id, (ctx) => handoverInstallation(ctx.scope, id, { to, note }, ctx.user.id, ctx.user.fullName));
-}
-export async function installDecideAction(id: string, decision: 'approved' | 'rejected', reason: string | null): Promise<ActionState> {
-  return pageGuard(id, (ctx) => decideInstallation(ctx.scope, id, decision, ctx.user.id, reason));
+export async function installSendBackAction(id: string, reason: string): Promise<ActionState> {
+  return pageGuard(id, (ctx) => sendBackInstallation(ctx.scope, id, reason, ctx.user.id));
 }
 export async function installItemsAction(id: string, items: { id: string; placement?: string | null; serialNo?: string | null; fitStatus?: string }[]): Promise<ActionState> {
   return pageGuard(id, (ctx) => updateInstallationItems(ctx.scope, id, items, ctx.user.id));
 }
-export async function installChecklistAction(id: string, which: 'survey' | 'testing', values: Record<string, boolean | string | number>): Promise<ActionState> {
-  return pageGuard(id, (ctx) => saveInstallationChecklist(ctx.scope, id, which, values, ctx.user.id));
+export async function installAddItemAction(id: string, productId: string, qty: number): Promise<ActionState> {
+  return pageGuard(id, (ctx) => addInstallationItem(ctx.scope, id, { productId, qty }, ctx.user.id));
 }
-export async function installMaterialsAction(id: string, rows: MaterialRow[]): Promise<ActionState> {
-  return pageGuard(id, (ctx) => saveInstallationMaterials(ctx.scope, id, rows, ctx.user.id));
+export async function installItemQtyAction(id: string, itemId: string, qty: number): Promise<ActionState> {
+  return pageGuard(id, (ctx) => changeInstallationItemQty(ctx.scope, id, itemId, qty, ctx.user.id));
+}
+export async function installRemoveItemAction(id: string, itemId: string, reason: string): Promise<ActionState> {
+  return pageGuard(id, (ctx) => removeInstallationItem(ctx.scope, id, itemId, reason, ctx.user.id));
+}
+
+/** What "Bill this installation" would bill - read-only, for the dialog. */
+export async function installBillDraftAction(id: string): Promise<{ error?: string; draft?: InstallationBillDraft }> {
+  try {
+    const ctx = await requireContext();
+    if (!ctx.permissions.has('invoice.create')) return { error: 'You do not have permission to raise invoices.' };
+    return { draft: JSON.parse(JSON.stringify(await installationBillDraft(ctx.scope, id))) as InstallationBillDraft };
+  } catch (err) {
+    if (err instanceof InstallationChallanError) return { error: err.message };
+    return { error: err instanceof Error ? err.message : 'Could not work out the bill.' };
+  }
+}
+
+export async function installBillAction(id: string, input: { includeMaterial: boolean; labourRupees: number; labourText: string | null }): Promise<ActionState & { invoiceId?: string }> {
+  try {
+    const ctx = await requireContext();
+    if (!ctx.permissions.has('invoice.create')) return { error: 'You do not have permission to raise invoices.' };
+    const inv = await billInstallation(ctx.scope, id, {
+      includeMaterial: input.includeMaterial, labourPaise: Math.round((Number(input.labourRupees) || 0) * 100), labourText: input.labourText,
+    }, ctx.user.id);
+    revalidatePath(`/services/installations/${id}`);
+    revalidatePath('/invoices');
+    refresh();
+    return { ok: true, invoiceId: inv.id, message: `${inv.invoiceNo} raised as a draft - issue it from Invoices.` };
+  } catch (err) {
+    if (err instanceof InstallationChallanError) return { error: err.message };
+    console.error('[installation] bill failed', err);
+    return { error: err instanceof Error ? err.message : friendlyError(err) };
+  }
+}
+
+export async function installCustomerAction(id: string, customerId: string): Promise<ActionState> {
+  return pageGuard(id, (ctx) => setInstallationCustomer(ctx.scope, id, customerId, ctx.user.id));
+}
+
+export async function installWaiveAction(id: string, reason: string): Promise<ActionState> {
+  return pageGuard(id, (ctx) => waiveInstallationBilling(ctx.scope, id, reason, ctx.user.id));
 }
 export async function installTeamAction(id: string, assigneeIds: string[], priority: string): Promise<ActionState> {
   return pageGuard(id, (ctx) => setInstallationTeam(ctx.scope, id, { assigneeIds, priority }, ctx.user.id));

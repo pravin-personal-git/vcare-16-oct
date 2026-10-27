@@ -275,6 +275,11 @@ export async function scheduleVisitAction(
       await scheduleInstallationVisit(ctx.scope, subjectId, technicianId, reason, istWallClock(scheduledAt), ctx.user.id);
       return;
     }
+    if (visitSubject(reason) === 'customer') {
+      // A survey booked from an installation's own page: the challan is the subject.
+      await scheduleInstallationVisit(ctx.scope, subjectId, technicianId, reason, istWallClock(scheduledAt), ctx.user.id);
+      return;
+    }
     await scheduleVisit(ctx.scope, subjectId, technicianId, purpose, istWallClock(scheduledAt), ctx.user.id, 'office', reason);
   });
 }
@@ -588,4 +593,18 @@ export async function removeJobPhoto(
   } catch (e) {
     return { error: friendlyError(e) };
   }
+}
+
+/**
+ * Survey before installing, for any customer (27 Oct 2026, Vcare): the
+ * customer and the site, a challan only if there already is one.
+ */
+export async function scheduleSurveyVisitAction(input: {
+  customerId: string; siteAddress: string | null; challanId: string | null; technicianId: string; scheduledAt: string;
+}): Promise<ActionState> {
+  return guard(async () => {
+    const ctx = await requireContext();
+    const { scheduleSurveyVisit } = await import('@/server/complaints');
+    await scheduleSurveyVisit(ctx.scope, { customerId: input.customerId, siteAddress: input.siteAddress, challanId: input.challanId }, input.technicianId, istWallClock(input.scheduledAt), ctx.user.id);
+  });
 }

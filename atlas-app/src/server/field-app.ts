@@ -3,7 +3,7 @@ import { db } from './db';
 import { scopeWhere, type StoreScope } from './store-scope';
 import { applyMovements } from './stock';
 import { LIST_MAX_ROWS } from '@/lib/list-limits';
-import { INSTALL_STAGES, nextStage, stageLabel } from '@/lib/installation-stages';
+import { INSTALL_STAGES, stageLabel } from '@/lib/installation-stages';
 
 /**
  * What a technician sees on their phone.
@@ -64,13 +64,14 @@ export async function technicianInstallations(
     orderBy: { dispatchedAt: 'desc' },
     take: LIST_MAX_ROWS,
     select: {
-      id: true, challanNo: true, status: true, stage: true, dispatchedAt: true,
+      id: true, challanNo: true, status: true, stage: true, dispatchedAt: true, siteLocation: true,
       salesOrder: {
         select: {
           orderNo: true, customerName: true, organizationName: true,
           shippingAddress: true, billingAddress: true,
         },
       },
+      customer: { select: { firstName: true, lastName: true, companyName: true, phone: true, phoneCc: true, addressLine1: true } },
       items: { select: { qty: true, stockUnitId: true, product: { select: { trackingMode: true } } } },
     },
   });
@@ -85,8 +86,8 @@ export async function technicianInstallations(
     stageLabel: stageLabel(c.stage),
     dispatchedAt: c.dispatchedAt,
     orderNo: c.salesOrder?.orderNo ?? null,
-    customerName: c.salesOrder?.organizationName ?? c.salesOrder?.customerName ?? 'No customer',
-    siteAddress: c.salesOrder?.shippingAddress ?? c.salesOrder?.billingAddress ?? null,
+    customerName: (c.customer && (c.customer.companyName || [c.customer.firstName, c.customer.lastName].filter(Boolean).join(' '))) || c.salesOrder?.organizationName || c.salesOrder?.customerName || 'No customer',
+    siteAddress: c.siteLocation ?? c.salesOrder?.shippingAddress ?? c.salesOrder?.billingAddress ?? c.customer?.addressLine1 ?? null,
     itemCount: c.items.length,
     totalQty: c.items.reduce((t, i) => t + i.qty, 0),
     // Only serial lines can be scanned. Counting a cable line as "unscanned"
@@ -95,19 +96,19 @@ export async function technicianInstallations(
   }));
 }
 
-/** The next stage a technician may move to from the phone; null at handover or later. */
-function phoneNextStage(stage: string, status: string): string | null {
-  if (status === 'approved') return null;
-  const n = nextStage(stage);
-  return n && n !== 'handover' && n !== 'approved' ? n : null;
-}
+/**
+ * Stages move by themselves since 27 Oct 2026, so the phone is never offered
+ * one to tap. Builds before 1.0.33 read `nextStage`; null hides their button.
+ */
+const phoneNextStage = (_stage: string, _status: string): string | null => null;
 
 export async function technicianInstallation(scope: StoreScope, challanId: string) {
   const c = await db.installationChallan.findFirst({
     where: { id: challanId, ...scopeWhere(scope) },
     select: {
       id: true, challanNo: true, status: true, stage: true, priority: true, dispatchedAt: true,
-      technicianRemark: true, note: true, physicalChallanNo: true, isInvoiced: true,
+      technicianRemark: true, note: true, physicalChallanNo: true, isInvoiced: true, siteLocation: true,
+      customer: { select: { firstName: true, lastName: true, companyName: true, phone: true, phoneCc: true, addressLine1: true } },
       salesOrder: {
         select: {
           id: true, orderNo: true, customerName: true, organizationName: true,
@@ -149,9 +150,9 @@ export async function technicianInstallation(scope: StoreScope, challanId: strin
     physicalChallanNo: c.physicalChallanNo,
     orderId: c.salesOrder?.id ?? null,
     orderNo: c.salesOrder?.orderNo ?? null,
-    customerName: c.salesOrder?.organizationName ?? c.salesOrder?.customerName ?? 'No customer',
-    phone: c.salesOrder?.phone ?? null,
-    siteAddress: c.salesOrder?.shippingAddress ?? c.salesOrder?.billingAddress ?? null,
+    customerName: (c.customer && (c.customer.companyName || [c.customer.firstName, c.customer.lastName].filter(Boolean).join(' '))) || c.salesOrder?.organizationName || c.salesOrder?.customerName || 'No customer',
+    phone: c.customer?.phone ? [c.customer.phoneCc, c.customer.phone].filter(Boolean).join(' ') : c.salesOrder?.phone ?? null,
+    siteAddress: c.siteLocation ?? c.salesOrder?.shippingAddress ?? c.salesOrder?.billingAddress ?? c.customer?.addressLine1 ?? null,
     team: c.assignees.map((a) => a.user.fullName),
     items: c.items.map((i) => ({
       id: i.id,
@@ -264,8 +265,10 @@ export async function visitDetail(scope: StoreScope, visitId: string) {
     where: { id: visitId, OR: [scopeWhere(scope), { complaint: scopeWhere(scope) }] },
     select: {
       id: true, scheduledAt: true, status: true, purpose: true, reason: true, outcomeNote: true,
-      checkedInAt: true, checkInWithinRange: true, technicianId: true,
+      checkedInAt: true, checkInWithinRange: true, technicianId: true, siteAddress: true,
       technician: { select: { fullName: true } },
+      // A survey's own customer (27 Oct 2026) - no complaint or challan to borrow one from.
+      customer: { select: { companyName: true, firstName: true, lastName: true, title: true, phone: true, phoneCc: true, addressLine1: true, city: true } },
       changes: {
         orderBy: { createdAt: 'desc' },
         select: { fromAt: true, toAt: true, kind: true, reason: true, requestedByCustomer: true, createdAt: true },
@@ -317,7 +320,7 @@ export async function visitDetail(scope: StoreScope, visitId: string) {
 
   const ch = v.installationChallan;
   const order = ch?.salesOrder ?? null;
-  const cu = v.complaint?.customer;
+  const cu = v.complaint?.customer ?? v.customer ?? undefined;
   // The complaint's contact first, then the site's, then the order's.
   const phone = v.complaint?.site?.contactPhone ?? cu?.phone ?? order?.phone ?? null;
 
@@ -356,15 +359,14 @@ export async function visitDetail(scope: StoreScope, visitId: string) {
     checkInWithinRange: v.checkInWithinRange,
     technicianName: v.technician.fullName,
     /** 'complaint' | 'installation' - what this visit is for (7 Oct 2026). */
-    subject: v.complaint ? 'complaint' as const : 'installation' as const,
+    subject: v.complaint ? 'complaint' as const : ch ? 'installation' as const : 'survey' as const,
     reason: v.reason,
     complaintId: v.complaint?.id ?? null,
     installationChallanId: ch?.id ?? null,
     /* The document the technician quotes on the phone - either number. */
-    complaintNo: v.complaint?.complaintNo ?? ch?.challanNo ?? '-',
+    complaintNo: v.complaint?.complaintNo ?? ch?.challanNo ?? 'Survey',
     description: v.complaint?.description
-      ?? [ch?.items.map((i) => `${i.productName} x${i.qty}`).join(', '), ch?.note].filter(Boolean).join(' - ')
-      ?? '',
+      ?? (ch ? [ch.items.map((i) => `${i.productName} x${i.qty}`).join(', '), ch.note].filter(Boolean).join(' - ') : 'Survey before installing - look at the site and note what is needed.'),
     customerName: (cu && (cu.companyName || [cu.title, cu.firstName, cu.lastName].filter(Boolean).join(' ').trim()))
       || order?.customerName
       || 'Customer not on the challan',
@@ -372,6 +374,7 @@ export async function visitDetail(scope: StoreScope, visitId: string) {
     siteName: v.complaint?.site?.name ?? null,
     siteAddress: v.complaint?.site?.address
       ?? v.complaint?.siteLocation
+      ?? v.siteAddress
       ?? (cu ? [cu.addressLine1, cu.city].filter(Boolean).join(', ') : '')
       // For an installation, where the goods were going.
       ?? order?.shippingAddress

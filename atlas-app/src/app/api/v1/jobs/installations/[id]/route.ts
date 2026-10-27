@@ -1,8 +1,7 @@
 import { field, jsonBody, str, V1Error } from '@/server/auth/v1-staff';
 import { db } from '@/server/db';
 import { scanUnitOntoChallan, technicianInstallation } from '@/server/field-app';
-import { setInstallationChallanStatus } from '@/server/installation-challans';
-import { setInstallationStage, updateInstallationItems } from '@/server/installation-page';
+import { markInstallationWorkDone, setInstallationStage, updateInstallationItems } from '@/server/installation-page';
 import { requestInstallationReturn } from '@/server/installation-returns';
 import { editJobChallan, INSTALL_WORK_STAGES, phoneInstallationParts, raiseInstallationChallan, requestPartsReturn, withdrawJobChallan } from '@/server/job-challans';
 import type { ResolvedAccess } from '@/lib/app-access';
@@ -76,7 +75,8 @@ export async function POST(req: Request, { params }: Params) {
       // The same transition the office uses, so the approval rules, the
       // activity log and the status vocabulary cannot drift apart between the
       // two screens.
-      await setInstallationChallanStatus(ctx.scope, { id, to: 'work_done' }, ctx.user.id);
+      // Optional "received by" from builds 1.0.33 on (27 Oct 2026): who took it over on site.
+      await markInstallationWorkDone(ctx.scope, id, ctx.user.id, str(b.receivedBy, 120) || null);
       return { ok: true };
     }
 

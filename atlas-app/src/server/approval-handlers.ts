@@ -255,7 +255,7 @@ const HANDLERS: Record<string, ApprovalHandler> = {
   installation_challan: {
     async describe(storeId, id) {
       const r = await db.installationChallan.findFirst({ where: { id, storeId }, select: { challanNo: true, createdBy: true } });
-      return r && { title: `Installation challan ${r.challanNo} - work done`, summary: null, amountPaise: null, requesterId: r.createdBy };
+      return r && { title: `Installation ${r.challanNo} - work done, to bill`, summary: null, amountPaise: null, requesterId: r.createdBy };
     },
     async decide(scope, id, decision, userId, note, auto) {
       if (!(await gateDecision(scope, 'installation_challan', id, decision, userId, note, auto))) return;
@@ -267,7 +267,7 @@ const HANDLERS: Record<string, ApprovalHandler> = {
     async pendingDirect(storeId) {
       const rows = await db.installationChallan.findMany({ where: { storeId, status: 'work_done' }, take: TAKE, select: { id: true, challanNo: true, createdBy: true, updatedAt: true } });
       const free = await noRequestFor('installation_challan', rows.map((r) => r.id));
-      return rows.filter((r) => free(r.id)).map((r) => ({ id: r.id, title: `Installation challan ${r.challanNo} - work done`, summary: null, amountPaise: null, requesterId: r.createdBy, since: r.updatedAt }));
+      return rows.filter((r) => free(r.id)).map((r) => ({ id: r.id, title: `Installation ${r.challanNo} - work done, to bill`, summary: null, amountPaise: null, requesterId: r.createdBy, since: r.updatedAt }));
     },
   },
 

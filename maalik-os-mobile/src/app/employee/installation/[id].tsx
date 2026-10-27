@@ -12,7 +12,7 @@ import { JobPartsCard } from '@/components/JobPartsCard';
 import { Waiting } from '@/components/OfflineBar';
 import { isQueued } from '@/lib/outbox';
 import {
-  installation, installationPartsAction, installationWorkDone, moveInstallationStage, returnInstallationItem, scanOntoInstallation,
+  installation, installationPartsAction, installationWorkDone, returnInstallationItem, scanOntoInstallation,
   updateInstallationItem, type InstallationItem,
 } from '@/lib/jobs';
 import { dialable, useAccess } from '@/lib/access';
@@ -45,6 +45,8 @@ export default function Installation() {
   const { data, error, loading, reload } = useLoad(load);
 
   const [busy, setBusy] = useState(false);
+  // Who took it over on site - optional, sent with Work done (27 Oct 2026).
+  const [receivedBy, setReceivedBy] = useState('');
   const [problem, setProblem] = useState<string | null>(null);
   // F-13: a change made with no signal - kept on the phone, sent later.
   const [notice, setNotice] = useState<string | null>(null);
@@ -78,7 +80,7 @@ export default function Installation() {
     setProblem(null);
     setBusy(true);
     try {
-      queuedOrDone(await installationWorkDone(String(id)));
+      queuedOrDone(await installationWorkDone(String(id), receivedBy.trim() || null));
       await reload();
     } catch (e) {
       setProblem(e instanceof Error ? e.message : t('Could not mark it done.'));
@@ -101,7 +103,6 @@ export default function Installation() {
       setBusy(false);
     }
   };
-  const moveStage = (to: string) => run(() => moveInstallationStage(String(id), to), t('Could not move the stage.'));
   const setFit = (item: InstallationItem, fitStatus: string) =>
     run(() => updateInstallationItem(String(id), item.id, { fitStatus }), t('Could not save that.'));
   const setPlacement = (item: InstallationItem, placement: string) => {
@@ -153,7 +154,7 @@ export default function Installation() {
       title={j.challanNo}
       subtitle={j.customerName}
       onRefresh={reload}
-      footer={canEdit && j.status === 'pending' ? (
+      footer={canEdit && (j.status === 'pending' || j.status === 'rejected') ? (
         <Button
           label={left > 0 ? `${t('Mark work done')} (${left} ${t('not scanned')})` : t('Mark work done')}
           onPress={finish}
@@ -202,23 +203,14 @@ export default function Installation() {
         <Card>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: space.sm, flexWrap: 'wrap' }}>
             <Text variant="small" color={c.inkSoft}>{t('Stage')}</Text>
-            <Pill label={t(j.stageLabel)} tone={j.stage === 'approved' ? 'success' : 'brand'} />
+            <Pill label={t(j.stageLabel)} tone={j.stage === 'billed' || j.stage === 'work_done' ? 'success' : 'brand'} />
             {j.stages && (
               <Text variant="micro" color={c.muted}>
                 {j.stages.findIndex((x) => x.key === j.stage) + 1} / {j.stages.length}
               </Text>
             )}
           </View>
-          {canEdit && j.nextStage && j.nextStageLabel && (
-            <Button
-              label={`${t('Move to')} ${t(j.nextStageLabel)}`}
-              variant="secondary"
-              icon="arrowRight"
-              onPress={() => { void moveStage(j.nextStage!); }}
-              loading={busy}
-              style={{ marginTop: space.sm }}
-            />
-          )}
+          {/* The stage moves by itself (27 Oct 2026): Working on site, Work done and the bill move it. */}
         </Card>
       )}
 
@@ -286,18 +278,17 @@ export default function Installation() {
                     onEndEditing={(e) => setPlacement(i, e.nativeEvent.text)}
                   />
                   <Segmented
-                    value={(i.fitStatus ?? 'to_fit') as 'to_fit' | 'fitted' | 'tested'}
+                    value={(i.fitStatus === 'tested' ? 'fitted' : i.fitStatus ?? 'to_fit') as 'to_fit' | 'fitted'}
                     options={[
                       { key: 'to_fit', label: t('To fit') },
                       { key: 'fitted', label: t('Fitted') },
-                      { key: 'tested', label: t('Tested') },
                     ]}
                     onChange={(k) => { if (k !== i.fitStatus) void setFit(i, k); }}
                   />
                 </>
               ) : (
                 <Text variant="micro" color={c.inkSoft}>
-                  {[i.placement, i.fitStatus === 'tested' ? t('Tested') : i.fitStatus === 'fitted' ? t('Fitted') : t('To fit')].filter(Boolean).join(' · ')}
+                  {[i.placement, i.fitStatus === 'to_fit' ? t('To fit') : t('Fitted')].filter(Boolean).join(' · ')}
                 </Text>
               )}
             </View>
@@ -342,6 +333,13 @@ export default function Installation() {
         the job would mean the technician leaves it open and the office chases
         it tomorrow.
       */}
+      {canEdit && (j.status === 'pending' || j.status === 'rejected') && (
+        <Card>
+          <Field label={t('Received by (optional)')} value={receivedBy} onChangeText={setReceivedBy} placeholder={t("The customer's name")} />
+          <Text variant="micro" color={c.muted} style={{ marginTop: space.xs }}>{t('Work done marks every item fitted and starts the warranty today.')}</Text>
+        </Card>
+      )}
+
       {left > 0 && (
         <Banner tone="warning">
           {left} {t('item(s) still have no number scanned against them. You can still finish, but the office will not know which ones went in.')}
