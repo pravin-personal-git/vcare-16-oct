@@ -33,6 +33,8 @@ export default async function BillPage({
         billDate: bill.billDate.toISOString(),
         dueDate: bill.dueDate.toISOString(),
         lifecycle: bill.lifecycle,
+        goodsStatus: bill.goodsStatus,
+        billedReceipts: bill.billedReceipts,
         freightPaise: bill.freightPaise,
         subtotalPaise: bill.subtotalPaise,
         itemDiscountPaise: bill.itemDiscountPaise,
@@ -58,6 +60,8 @@ export default async function BillPage({
           taxRatePct: Number(i.taxRatePct),
           lineTotalPaise: i.lineTotalPaise,
           movedStock: i.movedStock,
+          serial: i.product?.trackingMode === 'serial',
+          serials: i.serials,
         })),
         payments: bill.allocations.map((a) => ({
           id: a.payment.id,

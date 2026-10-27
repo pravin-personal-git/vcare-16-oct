@@ -16,10 +16,10 @@ import { Button } from '@/components/ui/Button';
 import { Modal } from '@/components/ui/Modal';
 import { Icon } from '@/components/ui/Icon';
 import {
-  AGE_BUCKET_LABEL, BILL_STATUS_LABEL, ageBucket, computeBillTotals,
+  AGE_BUCKET_LABEL, BILL_STATUS_LABEL, ageBucket,
   type BillStatus,
 } from '@/lib/purchase';
-import { createBillAction } from './actions';
+import { NewBillModal } from './NewBillModal';
 
 /**
  * Supplier bills.
@@ -51,22 +51,6 @@ interface BillVM {
   lineCount: number;
 }
 
-interface SupplierVM { id: string; name: string; gstin: string | null; isSupplier: boolean }
-interface ProductVM {
-  id: string; name: string; code: string;
-  hsnCode: string | null; kind: string; unit: string;
-}
-
-interface LineDraft {
-  productId: string | null;
-  productName: string;
-  productCode: string | null;
-  hsnCode: string | null;
-  qty: string;
-  unitCost: string;
-  discountPct: string;
-  taxRatePct: string;
-}
 
 const rupees = (p: number) =>
   `₹${(p / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -74,12 +58,6 @@ const rupees = (p: number) =>
 const fmtDate = (d: string) =>
   new Date(d).toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', year: '2-digit' });
 
-/** Rupees typed by a human into integer paise. Never floats near money. */
-function toPaise(v: string): number {
-  const n = Number(String(v).replace(/,/g, '').trim());
-  if (!Number.isFinite(n) || n < 0) return 0;
-  return Math.round(n * 100);
-}
 
 const STATUS_TONE: Record<BillStatus, 'neutral' | 'info' | 'warning' | 'success' | 'danger'> = {
   draft: 'neutral',
@@ -90,14 +68,14 @@ const STATUS_TONE: Record<BillStatus, 'neutral' | 'info' | 'warning' | 'success'
   cancelled: 'neutral',
 };
 
-const blankLine = (): LineDraft => ({
-  productId: null, productName: '', productCode: null, hsnCode: null,
-  qty: '1', unitCost: '', discountPct: '0', taxRatePct: '18',
-});
 
 export function BillsClient({
-  rangeLabel, bills, suppliers, products, canEdit, canPay, paging, total, totals, supplierNames, card, supplier,
+  rangeLabel, bills, canEdit, canPay, paging, total, totals, supplierNames, card, supplier, unbilled = [], awaited = 0,
 }: {
+  /** Goods receipts not yet billed (28 Oct 2026) - the loop the bill form closes. */
+  unbilled?: { id: string; grnNo: string; supplierName: string; receivedDate: string; valuePaise: number }[];
+  /** Posted bills whose goods are still to come. */
+  awaited?: number;
   /** "All time", "This month"... - the active date filter (9 Oct 2026). */
   rangeLabel: string;
   /** One server-side page (F1b): searched, filtered and sorted on the server. */
@@ -110,8 +88,6 @@ export function BillsClient({
   supplierNames: string[];
   card: string | null;
   supplier: string;
-  suppliers: SupplierVM[];
-  products: ProductVM[];
   canEdit: boolean;
   canPay: boolean;
 }) {
@@ -124,6 +100,7 @@ export function BillsClient({
   const setCardKey = (k: string | null) => list.set({ card: k });
   const setSupplier = (v: string) => list.set({ supplier: v || null });
   const [showNew, setShowNew] = useState(false);
+  const [toast, setToast] = useState<string | null>(null);
 
   const now = new Date();
 
@@ -212,6 +189,23 @@ export function BillsClient({
         subtitle={`${rangeLabel} · ${rupees(totals.purchased)} purchased · ${rupees(totals.owed)} still owed`}
       />
 
+      {(unbilled.length > 0 || awaited > 0) && (
+        <Card className="mb-3 border-info/30 bg-info/[0.05] px-3 py-2.5">
+          {awaited > 0 && (
+            <p className="text-xs"><Icon name="clock" className="me-1 inline h-3.5 w-3.5" /><strong>{awaited} bill{awaited === 1 ? '' : 's'} with goods still to come.</strong> Open the bill and press Receive goods when they arrive.</p>
+          )}
+          {unbilled.length > 0 && (
+            <div className="mt-1 text-xs">
+              <Icon name="package" className="me-1 inline h-3.5 w-3.5" /><strong>{unbilled.length} goods receipt{unbilled.length === 1 ? '' : 's'} not billed yet</strong> - stock is in, nothing owed. Enter the supplier&apos;s bill and pick the receipt under &ldquo;Against&rdquo;:{' '}
+              {unbilled.slice(0, 6).map((g, k) => (
+                <span key={g.id}>{k ? ', ' : ''}<Link href={`/goods-receipt?open=${g.id}`} className="font-mono text-brand hover:underline">{g.grnNo}</Link> {g.supplierName} {rupees(g.valuePaise)}</span>
+              ))}
+              {unbilled.length > 6 ? ` and ${unbilled.length - 6} more` : ''}
+            </div>
+          )}
+        </Card>
+      )}
+
       {totals.drafts > 0 && (
         <Card className="mb-3 flex items-start gap-2.5 border-warning/30 bg-warning/[0.06] px-3 py-2.5">
           <Icon name="alert-triangle" className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
@@ -276,326 +270,11 @@ export function BillsClient({
 
       {showNew && (
         <NewBillModal
-          suppliers={suppliers}
-          products={products}
           onClose={() => setShowNew(false)}
-          onSaved={() => { setShowNew(false); router.refresh(); }}
+          onSaved={(msg) => { setShowNew(false); setToast(msg); setTimeout(() => setToast(null), 5000); router.refresh(); }}
         />
       )}
+      {toast && <div role="status" className="fixed bottom-5 start-1/2 z-[60] -translate-x-1/2 rounded bg-foreground px-4 py-3 text-sm text-background shadow-raised">{toast}</div>}
     </>
   );
 }
-
-// ------------------------------------------------------------- new bill
-
-function NewBillModal({
-  suppliers, products, onClose, onSaved,
-}: {
-  suppliers: SupplierVM[];
-  products: ProductVM[];
-  onClose: () => void;
-  onSaved: () => void;
-}) {
-  const today = new Date().toISOString().slice(0, 10);
-
-  const [partyId, setPartyId] = useState('');
-  const [supplierBillNo, setSupplierBillNo] = useState('');
-  const [billDate, setBillDate] = useState(today);
-  const [dueDate, setDueDate] = useState(today);
-  const [freight, setFreight] = useState('0');
-  const [notes, setNotes] = useState('');
-  const [lines, setLines] = useState<LineDraft[]>([blankLine()]);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  /**
-   * The totals are computed HERE with the same function the server uses.
-   *
-   * Not for correctness - the server recomputes everything and its answer is
-   * the one that gets stored, because the client is never trusted with money.
-   * This is so the person typing sees the tax and the total change as they
-   * type, which is how they notice they have entered 1000 instead of 100.
-   */
-  const preview = useMemo(() => computeBillTotals(
-    lines.map((l) => ({
-      qty: Number(l.qty) || 0,
-      unitCostPaise: toPaise(l.unitCost),
-      discountPct: Number(l.discountPct) || 0,
-      taxRatePct: Number(l.taxRatePct) || 0,
-    })),
-    toPaise(freight),
-    // A guess, purely for the preview. The server resolves the real tax mode
-    // from the supplier's state and overrules this.
-    'IGST',
-  ), [lines, freight]);
-
-  const setLine = (i: number, patch: Partial<LineDraft>) => {
-    setLines((prev) => prev.map((l, j) => (j === i ? { ...l, ...patch } : l)));
-  };
-
-  const pickProduct = (i: number, productId: string) => {
-    const p = products.find((x) => x.id === productId);
-    if (!p) {
-      setLine(i, { productId: null });
-      return;
-    }
-    setLine(i, {
-      productId: p.id,
-      productName: p.name,
-      productCode: p.code,
-      hsnCode: p.hsnCode,
-    });
-  };
-
-  const submit = async (post: boolean) => {
-    setBusy(true);
-    setError(null);
-
-    const result = await createBillAction({
-      partyId,
-      supplierBillNo,
-      billDate,
-      dueDate,
-      freightPaise: toPaise(freight),
-      notes: notes.trim() || null,
-      lines: lines
-        .filter((l) => l.productName.trim() && Number(l.qty) > 0)
-        .map((l) => ({
-          productId: l.productId,
-          productName: l.productName.trim(),
-          productCode: l.productCode,
-          hsnCode: l.hsnCode,
-          qty: Number(l.qty),
-          unitCostPaise: toPaise(l.unitCost),
-          discountPct: Number(l.discountPct) || 0,
-          taxRatePct: Number(l.taxRatePct) || 0,
-        })),
-      post,
-    });
-
-    setBusy(false);
-    if (result.error) setError(result.error);
-    else onSaved();
-  };
-
-  const ready = partyId && supplierBillNo.trim()
-    && lines.some((l) => l.productName.trim() && Number(l.qty) > 0);
-
-  return (
-    <Modal
-      title="New purchase bill"
-      subtitle="What arrived, what it cost, and when it has to be paid"
-      icon="receipt"
-      size="xl"
-      onClose={onClose}
-      footer={
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <span className="text-sm">
-            Total <strong className="tabular-nums">{rupees(preview.grandTotalPaise)}</strong>
-            <span className="ms-2 text-xs text-muted-foreground">
-              incl. {rupees(preview.igstPaise + preview.cgstPaise + preview.sgstPaise)} tax
-            </span>
-          </span>
-          <div className="flex gap-2">
-            <Button onClick={onClose} disabled={busy}>Cancel</Button>
-            <Button onClick={() => submit(false)} disabled={!ready || busy} loading={busy}>
-              Save draft
-            </Button>
-            <Button
-              variant="primary"
-              onClick={() => submit(true)}
-              disabled={!ready || busy}
-              loading={busy}
-            >
-              Save &amp; post
-            </Button>
-          </div>
-        </div>
-      }
-    >
-      {error && (
-        <Card className="mb-3 border-danger/30 bg-danger/[0.06] px-3 py-2.5">
-          <p className="text-xs leading-relaxed text-danger">{error}</p>
-        </Card>
-      )}
-
-      <div className="grid gap-3 sm:grid-cols-2">
-        <Field label="Supplier">
-          <select
-            className="w-full rounded-md border border-border bg-card px-2 py-1.5 text-sm"
-            value={partyId}
-            onChange={(e) => setPartyId(e.target.value)}
-          >
-            <option value="">Choose a supplier…</option>
-            {suppliers.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.name}{s.isSupplier ? '' : ' (customer)'}
-              </option>
-            ))}
-          </select>
-        </Field>
-
-        <Field
-          label="Their bill number"
-          hint="What the supplier calls it. Goes on the GST return."
-        >
-          <input
-            className="w-full rounded-md border border-border bg-card px-2 py-1.5 text-sm"
-            value={supplierBillNo}
-            onChange={(e) => setSupplierBillNo(e.target.value)}
-            placeholder="e.g. INV/2026/1184"
-          />
-        </Field>
-
-        <Field label="Bill date">
-          <input
-            type="date"
-            className="w-full rounded-md border border-border bg-card px-2 py-1.5 text-sm"
-            value={billDate}
-            onChange={(e) => setBillDate(e.target.value)}
-          />
-        </Field>
-
-        <Field label="Payment due">
-          <input
-            type="date"
-            className="w-full rounded-md border border-border bg-card px-2 py-1.5 text-sm"
-            value={dueDate}
-            onChange={(e) => setDueDate(e.target.value)}
-          />
-        </Field>
-      </div>
-
-      <SectionCard title="Items" icon="package" className="mt-4" bodyClassName="p-0">
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[52rem] text-sm">
-            <thead>
-              <tr className="border-b border-border bg-muted/40 text-left text-micro uppercase tracking-wide text-muted-foreground">
-                <th className="px-2 py-2 font-semibold">Item</th>
-                <th className="px-2 py-2 text-right font-semibold">Qty</th>
-                <th className="px-2 py-2 text-right font-semibold">Unit cost ₹</th>
-                <th className="px-2 py-2 text-right font-semibold">Disc %</th>
-                <th className="px-2 py-2 text-right font-semibold">GST %</th>
-                <th className="px-2 py-2 text-right font-semibold">Taxable</th>
-                <th className="px-2 py-2" />
-              </tr>
-            </thead>
-            <tbody>
-              {lines.map((l, i) => (
-                <tr key={i} className="border-b border-border last:border-0">
-                  <td className="px-2 py-1.5">
-                    <select
-                      className="mb-1 w-full rounded-md border border-border bg-card px-2 py-1 text-xs"
-                      value={l.productId ?? ''}
-                      onChange={(e) => pickProduct(i, e.target.value)}
-                    >
-                      <option value="">Not in catalogue -</option>
-                      {products.map((p) => (
-                        <option key={p.id} value={p.id}>{p.name}</option>
-                      ))}
-                    </select>
-                    <input
-                      className="w-full rounded-md border border-border bg-card px-2 py-1 text-xs"
-                      value={l.productName}
-                      onChange={(e) => setLine(i, { productName: e.target.value })}
-                      placeholder="Description"
-                    />
-                  </td>
-                  <NumCell value={l.qty} onChange={(v) => setLine(i, { qty: v })} />
-                  <NumCell value={l.unitCost} onChange={(v) => setLine(i, { unitCost: v })} />
-                  <NumCell value={l.discountPct} onChange={(v) => setLine(i, { discountPct: v })} />
-                  <NumCell value={l.taxRatePct} onChange={(v) => setLine(i, { taxRatePct: v })} />
-                  <td className="px-2 py-1.5 text-right tabular-nums">
-                    {rupees(preview.lines[i]?.taxablePaise ?? 0)}
-                  </td>
-                  <td className="px-2 py-1.5 text-right">
-                    {lines.length > 1 && (
-                      <button
-                        type="button"
-                        className="text-xs text-danger hover:underline"
-                        onClick={() => setLines((p) => p.filter((_, j) => j !== i))}
-                      >
-                        Remove
-                      </button>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-
-        <div className="border-t border-border bg-muted/20 px-3 py-2">
-          <Button
-            size="sm"
-            icon="plus"
-            onClick={() => setLines((p) => [...p, blankLine()])}
-          >
-            Add line
-          </Button>
-        </div>
-      </SectionCard>
-
-      <div className="mt-4 grid gap-3 sm:grid-cols-2">
-        <Field
-          label="Freight / delivery ₹"
-          hint="Spread across the lines by value, so unit costs stay true."
-        >
-          <input
-            className="w-full rounded-md border border-border bg-card px-2 py-1.5 text-sm"
-            value={freight}
-            onChange={(e) => setFreight(e.target.value)}
-            inputMode="decimal"
-          />
-        </Field>
-
-        <Field label="Notes">
-          <input
-            className="w-full rounded-md border border-border bg-card px-2 py-1.5 text-sm"
-            value={notes}
-            onChange={(e) => setNotes(e.target.value)}
-            placeholder="Optional"
-          />
-        </Field>
-      </div>
-
-      <div className="mt-4 rounded-lg border border-border bg-muted/30 p-3 text-sm">
-        <SummaryRow label="Subtotal" value={rupees(preview.subtotalPaise)} />
-        {preview.itemDiscountPaise > 0 && (
-          <SummaryRow label="Less discount" value={`− ${rupees(preview.itemDiscountPaise)}`} />
-        )}
-        {toPaise(freight) > 0 && <SummaryRow label="Freight" value={rupees(toPaise(freight))} />}
-        <SummaryRow label="Taxable value" value={rupees(preview.taxableBasePaise)} />
-        <SummaryRow
-          label="GST"
-          value={rupees(preview.igstPaise + preview.cgstPaise + preview.sgstPaise)}
-        />
-        <SummaryRow label="Total" value={rupees(preview.grandTotalPaise)} strong />
-        <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
-          The split between IGST and CGST+SGST is decided by the supplier&apos;s state when this
-          is saved. This preview assumes IGST; the total does not change either way.
-        </p>
-      </div>
-
-      <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
-        <strong>Save &amp; post</strong> puts the stock on the shelf, records what each item cost
-        including its share of freight, and adds the bill to what you owe.
-        <strong> Save draft</strong> does none of that - use it if the goods have not arrived yet.
-      </p>
-    </Modal>
-  );
-}
-
-function NumCell({ value, onChange }: { value: string; onChange: (v: string) => void }) {
-  return (
-    <td className="px-2 py-1.5">
-      <input
-        className="w-20 rounded-md border border-border bg-card px-2 py-1 text-right text-xs tabular-nums"
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        inputMode="decimal"
-      />
-    </td>
-  );
-}
-

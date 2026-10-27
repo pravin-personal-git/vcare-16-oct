@@ -762,6 +762,8 @@ export async function receiveDirectlyForBill(
     lines: GrnLineDraft[];
   },
   userId: string,
+  /** Serials captured on the bill, by receipt line number (28 Oct 2026); blanks get house tags. */
+  lineUnits: LineUnits = new Map(),
 ): Promise<{ id: string; grnNo: string } | null> {
   if (input.lines.length === 0) return null;
   const storeId = scopeForWrite(scope);
@@ -798,7 +800,7 @@ export async function receiveDirectlyForBill(
     return created;
   });
 
-  await postGrn(scope, grn.id, userId);
+  await postGrn(scope, grn.id, userId, lineUnits);
   return { id: grn.id, grnNo };
 }
 
@@ -808,7 +810,7 @@ export async function listGrns(scope: StoreScope) {
     orderBy: { receivedDate: 'desc' },
     select: {
       id: true, grnNo: true, supplierName: true, partyId: true, receivedDate: true,
-      status: true, sourceBillId: true, purchaseOrderId: true, notes: true,
+      status: true, sourceBillId: true, billedOnId: true, purchaseOrderId: true, notes: true,
       supplierInvoiceNo: true, legacyRef: true,
       items: { select: { qty: true, productId: true } },
     },

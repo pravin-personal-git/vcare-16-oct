@@ -4,7 +4,7 @@ import { db } from './db';
 import { scopeForWrite, scopeWhere, type StoreScope } from './store-scope';
 import { allocateDocumentNumber } from './allocate-document-number';
 import { resolveTaxMode } from './gst';
-import { receiveDirectlyForBill, cancelGrn } from './goods-receipt';
+import { receiveDirectlyForBill, cancelGrn, serialsAlreadyOnFile, type LineUnits } from './goods-receipt';
 import {
   allocateOldestFirst,
   billStatus,
@@ -140,7 +140,12 @@ export interface BillLineDraft extends BillLineInput {
   productName: string;
   productCode?: string | null;
   hsnCode?: string | null;
+  /** Serials scanned or typed on the line - serial-tracked products only (28 Oct 2026). */
+  serials?: string[];
 }
+
+/** Have the goods arrived? - see `PurchaseBill.goodsStatus`. */
+export type BillGoods = 'received' | 'on_receipt' | 'awaited';
 
 export interface CreateBillInput {
   partyId: string;
@@ -153,6 +158,10 @@ export interface CreateBillInput {
   lines: BillLineDraft[];
   /** Post it immediately rather than leaving a draft. */
   post?: boolean;
+  /** Have the goods arrived? Default: with the bill, as before 28 Oct 2026. */
+  goods?: BillGoods;
+  /** `on_receipt`: the posted goods receipts this bill pays for. */
+  grnIds?: string[];
 }
 
 export async function createBill(
@@ -181,6 +190,49 @@ export async function createBill(
     },
   });
   if (!party) throw new PurchaseError('Supplier not found in your scope.');
+
+  // ---- have the goods arrived? (28 Oct 2026)
+  const goods: BillGoods = input.goods ?? 'received';
+  if (!['received', 'on_receipt', 'awaited'].includes(goods)) throw new PurchaseError('Say whether the goods have arrived.');
+  const grnIds = [...new Set(input.grnIds ?? [])];
+  if (goods === 'on_receipt') {
+    if (!grnIds.length) throw new PurchaseError('Choose the goods receipt this bill pays for.');
+    const grns = await db.goodsReceiptNote.findMany({
+      where: { id: { in: grnIds }, storeId },
+      select: { grnNo: true, status: true, partyId: true, sourceBillId: true, billedOnId: true },
+    });
+    if (grns.length !== grnIds.length) throw new PurchaseError('One of those goods receipts is not in your branch.');
+    for (const g of grns) {
+      if (g.status !== 'posted') throw new PurchaseError(`${g.grnNo} is not a posted receipt.`);
+      if (g.partyId !== party.id) throw new PurchaseError(`${g.grnNo} is from a different supplier.`);
+      if (g.sourceBillId || g.billedOnId) throw new PurchaseError(`${g.grnNo} is already billed.`);
+    }
+  }
+
+  // ---- serials on the lines: serial products only, none twice, none already on file
+  const productIds = [...new Set(input.lines.map((l) => l.productId).filter((x): x is string => !!x))];
+  const tracking = new Map((productIds.length ? await db.product.findMany({
+    where: { id: { in: productIds }, storeId }, select: { id: true, trackingMode: true },
+  }) : []).map((p) => [p.id, p.trackingMode]));
+  const wanted: { productId: string; serial: string }[] = [];
+  const seenSerial = new Set<string>();
+  for (const l of input.lines) {
+    const serials = (l.serials ?? []).map((x) => x.trim()).filter(Boolean);
+    l.serials = goods === 'received' && l.productId && tracking.get(l.productId) === 'serial' ? serials : [];
+    if (l.serials.length > l.qty) throw new PurchaseError(`${l.productName}: ${l.serials.length} serials for a quantity of ${l.qty}.`);
+    for (const sn of l.serials) {
+      const k = sn.toUpperCase();
+      if (seenSerial.has(k)) throw new PurchaseError(`Serial ${sn} is on this bill twice.`);
+      seenSerial.add(k);
+      wanted.push({ productId: l.productId!, serial: sn });
+    }
+  }
+  if (wanted.length) {
+    const taken = await serialsAlreadyOnFile(storeId, wanted);
+    if (taken.length) {
+      throw new PurchaseError(`Already in stock: ${taken.slice(0, 5).join(', ')}${taken.length > 5 ? ` and ${taken.length - 5} more` : ''}. A serial can only arrive once.`);
+    }
+  }
 
   const supplierName = partyDisplayName(party);
 
@@ -224,6 +276,7 @@ export async function createBill(
         billDate: input.billDate,
         dueDate: input.dueDate,
         lifecycle: 'draft',
+        goodsStatus: goods,
         freightPaise: input.freightPaise ?? 0,
         subtotalPaise: totals.subtotalPaise,
         itemDiscountPaise: totals.itemDiscountPaise,
@@ -254,8 +307,13 @@ export async function createBill(
         lineDiscountPaise: totals.lines[i].lineDiscountPaise,
         lineTotalPaise: totals.lines[i].taxablePaise,
         movedStock: false,
+        serials: l.serials ?? [],
       })),
     });
+
+    if (goods === 'on_receipt') {
+      await tx.goodsReceiptNote.updateMany({ where: { id: { in: grnIds }, storeId, billedOnId: null }, data: { billedOnId: created.id } });
+    }
 
     // A supplier who was only ever a customer becomes both. Silently, because
     // making somebody tick a box before they can enter a bill is friction that
@@ -330,10 +388,10 @@ export async function postApprovedBill(
     where: { id: billId, ...scopeWhere(scope) },
     select: {
       id: true, billNo: true, lifecycle: true, partyId: true, billDate: true,
-      supplierBillNo: true, freightPaise: true, taxMode: true, supplierName: true,
+      supplierBillNo: true, freightPaise: true, taxMode: true, supplierName: true, goodsStatus: true,
       items: {
         select: {
-          id: true, productId: true, productName: true, productCode: true,
+          id: true, productId: true, productName: true, productCode: true, serials: true,
           qty: true, unitCostPaise: true,
           discountPct: true, taxRatePct: true, lineTotalPaise: true, srNo: true,
           product: { select: { id: true, kind: true } },
@@ -463,19 +521,28 @@ export async function postApprovedBill(
   // above, and guarded the same way: a retry after the transaction below
   // fails partway through must not create a second receipt for goods
   // already received once.
-  const alreadyReceived = await db.goodsReceiptNote.findFirst({
-    where: { ...scopeWhere(scope), sourceBillId: bill.id },
-    select: { id: true },
-  });
-  if (!alreadyReceived) {
-    await receiveDirectlyForBill(scope, {
-      billId: bill.id,
-      billNo: bill.billNo,
-      partyId: bill.partyId,
-      supplierName: bill.supplierName,
-      receivedDate: bill.billDate,
-      lines: grnLines,
-    }, userId);
+  /*
+    HAVE THE GOODS ARRIVED? (28 Oct 2026) - stock moves exactly once:
+      received    the receipt is made here, with the serials on the lines
+      on_receipt  the goods came on an earlier receipt (linked) - nothing moves
+      awaited     nothing moves now; `receiveBillGoods` does it on arrival
+  */
+  const goods = bill.goodsStatus as BillGoods;
+  if (goods === 'received') {
+    const alreadyReceived = await db.goodsReceiptNote.findFirst({
+      where: { ...scopeWhere(scope), sourceBillId: bill.id },
+      select: { id: true },
+    });
+    if (!alreadyReceived) {
+      await receiveDirectlyForBill(scope, {
+        billId: bill.id,
+        billNo: bill.billNo,
+        partyId: bill.partyId,
+        supplierName: bill.supplierName,
+        receivedDate: bill.billDate,
+        lines: grnLines,
+      }, userId, unitsByGrnLine(bill.items));
+    }
   }
 
   await db.$transaction(async (tx) => {
@@ -484,7 +551,7 @@ export async function postApprovedBill(
     }
     for (const item of bill.items) {
       const isStock = item.productId != null && item.product?.kind !== 'service';
-      if (!isStock) continue;
+      if (!isStock || goods === 'awaited') continue;
       await tx.purchaseBillItem.update({ where: { id: item.id }, data: { movedStock: true } });
     }
 
@@ -493,6 +560,119 @@ export async function postApprovedBill(
       data: { lifecycle: 'received' },
     });
   });
+}
+
+/**
+ * The serials typed on a bill, by the line number of the receipt the bill
+ * makes (its stock lines, in order). Fewer than the quantity: the rest get
+ * house tags when the receipt posts.
+ */
+function unitsByGrnLine(items: { productId: string | null; qty: number; serials: string[]; product: { kind: string } | null }[]): LineUnits {
+  const out: LineUnits = new Map();
+  let n = 0;
+  for (const item of items) {
+    const isStock = item.productId != null && item.product?.kind !== 'service';
+    if (!isStock) continue;
+    n++;
+    // Only the scanned serials: boxes past them get house tags (lib/house-tag) -
+    // a blank here would mean "serial to follow" instead.
+    if (item.serials.length) out.set(n, [...item.serials]);
+  }
+  return out;
+}
+
+/**
+ * The goods of an "awaited" bill arrive (28 Oct 2026): the store receives
+ * them against the bill - a receipt with the bill's quantities and landed
+ * costs, and the serials scanned now. The bill becomes "received".
+ */
+export async function receiveBillGoods(
+  scope: StoreScope, billId: string, serialsByItem: Record<string, string[]>, userId: string,
+): Promise<{ grnNo: string | null }> {
+  const storeId = scopeForWrite(scope);
+  const bill = await db.purchaseBill.findFirst({
+    where: { id: billId, ...scopeWhere(scope) },
+    select: {
+      id: true, billNo: true, lifecycle: true, goodsStatus: true, partyId: true, supplierName: true, freightPaise: true, taxMode: true,
+      items: {
+        orderBy: { srNo: 'asc' },
+        select: {
+          id: true, productId: true, productName: true, productCode: true, qty: true, unitCostPaise: true, discountPct: true, taxRatePct: true,
+          serials: true, product: { select: { kind: true, trackingMode: true } },
+        },
+      },
+    },
+  });
+  if (!bill) throw new PurchaseError('Bill not found in your scope.');
+  if (bill.lifecycle !== 'received') throw new PurchaseError('Post the bill first - then receive its goods.');
+  if (bill.goodsStatus !== 'awaited') throw new PurchaseError('The goods on this bill are already received.');
+
+  const totals = computeBillTotals(
+    bill.items.map((i) => ({ qty: i.qty, unitCostPaise: i.unitCostPaise, discountPct: Number(i.discountPct), taxRatePct: Number(i.taxRatePct) })),
+    bill.freightPaise, bill.taxMode === 'CGST_SGST' ? 'CGST_SGST' : 'IGST',
+  );
+  const items = bill.items.map((it) => {
+    const serial = it.product?.trackingMode === 'serial';
+    const serials = serial ? (serialsByItem[it.id] ?? []).map((x) => x.trim()).filter(Boolean) : [];
+    if (serials.length > it.qty) throw new PurchaseError(`${it.productName}: ${serials.length} serials for a quantity of ${it.qty}.`);
+    return { ...it, serials };
+  });
+  const wanted = items.flatMap((it) => it.serials.map((sn) => ({ productId: it.productId!, serial: sn })));
+  const dupe = wanted.find((w, i) => wanted.findIndex((x) => x.serial.toUpperCase() === w.serial.toUpperCase()) !== i);
+  if (dupe) throw new PurchaseError(`Serial ${dupe.serial} is entered twice.`);
+  if (wanted.length) {
+    const taken = await serialsAlreadyOnFile(storeId, wanted);
+    if (taken.length) throw new PurchaseError(`Already in stock: ${taken.slice(0, 5).join(', ')}. A serial can only arrive once.`);
+  }
+  const lines: { productId: string; productName: string; productCode: string | null; qty: number; unitCostPaise: number }[] = [];
+  items.forEach((it, i) => {
+    if (!(it.productId != null && it.product?.kind !== 'service')) return;
+    lines.push({
+      productId: it.productId, productName: it.productName, productCode: it.productCode, qty: it.qty,
+      unitCostPaise: landedUnitCostPaise(totals.lines[i].taxablePaise, totals.lines[i].freightSharePaise, it.qty),
+    });
+  });
+  const grn = await receiveDirectlyForBill(scope, {
+    billId: bill.id, billNo: bill.billNo, partyId: bill.partyId, supplierName: bill.supplierName,
+    receivedDate: new Date(), lines,
+  }, userId, unitsByGrnLine(items));
+  await db.$transaction(async (tx) => {
+    for (const it of items) {
+      if (!(it.productId != null && it.product?.kind !== 'service')) continue;
+      await tx.purchaseBillItem.update({ where: { id: it.id }, data: { movedStock: true, serials: it.serials } });
+    }
+    await tx.purchaseBill.update({ where: { id: bill.id }, data: { goodsStatus: 'received' } });
+  });
+  return { grnNo: grn?.grnNo ?? null };
+}
+
+/** A supplier's goods receipts not yet billed, with their lines - "Bill from a receipt" (28 Oct 2026). */
+export async function unbilledReceipts(scope: StoreScope, partyId?: string) {
+  const rows = await db.goodsReceiptNote.findMany({
+    where: { ...scopeWhere(scope), status: 'posted', sourceBillId: null, billedOnId: null, ...(partyId ? { partyId } : {}) },
+    orderBy: { receivedDate: 'desc' },
+    take: 50,
+    select: {
+      id: true, grnNo: true, partyId: true, supplierName: true, receivedDate: true, supplierInvoiceNo: true, createdAt: true,
+      items: {
+        orderBy: { srNo: 'asc' },
+        select: {
+          id: true, productId: true, productName: true, productCode: true, qty: true, unitCostPaise: true, taxRatePct: true,
+          units: { select: { serialNo: true } },
+        },
+      },
+    },
+  });
+  return rows.map((g) => ({
+    id: g.id, grnNo: g.grnNo, partyId: g.partyId, supplierName: g.supplierName, receivedDate: g.receivedDate, createdAt: g.createdAt,
+    supplierInvoiceNo: g.supplierInvoiceNo,
+    valuePaise: g.items.reduce((n, i) => n + i.qty * i.unitCostPaise, 0),
+    items: g.items.map((i) => ({
+      id: i.id, productId: i.productId, productName: i.productName, productCode: i.productCode, qty: i.qty, unitCostPaise: i.unitCostPaise,
+      taxRatePct: i.taxRatePct === null ? 18 : Number(i.taxRatePct),
+      serials: i.units.map((u) => u.serialNo).filter((x): x is string => !!x),
+    })),
+  }));
 }
 
 /**
@@ -550,6 +730,8 @@ export async function cancelBill(
   if (grn) {
     await cancelGrn(scope, grn.id, userId, `Bill ${bill.billNo} cancelled: ${reason.trim()}`);
   }
+  // Receipts it paid for that came first stay - the goods are here - and are unbilled again.
+  await db.goodsReceiptNote.updateMany({ where: { billedOnId: bill.id }, data: { billedOnId: null } });
 
   // Cost history rows are NOT deleted. What a thing cost on the day it was
   // bought is a historical fact, and a cancelled bill does not unmake it -
@@ -835,7 +1017,8 @@ export async function getBill(scope: StoreScope, billId: string) {
   const bill = await db.purchaseBill.findFirst({
     where: { id: billId, ...scopeWhere(scope) },
     include: {
-      items: { orderBy: { srNo: 'asc' } },
+      items: { orderBy: { srNo: 'asc' }, include: { product: { select: { trackingMode: true } } } },
+      billedReceipts: { select: { id: true, grnNo: true } },
       allocations: {
         include: {
           payment: {

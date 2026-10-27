@@ -1,5 +1,6 @@
 'use client';
 
+import { PickList } from '@/components/ui/PickList';
 import { SupplierLink } from '@/components/document/SupplierLink';
 import Link from 'next/link';
 import { useEffect, useRef, useState } from 'react';
@@ -43,6 +44,8 @@ interface ReceiptVM {
   receivedDate: string;
   status: string;
   sourceBillId: string | null;
+  /** The bill that paid for it, when the goods came first (28 Oct 2026). */
+  billedOnId?: string | null;
   purchaseOrderId: string | null;
   notes: string | null;
   supplierInvoiceNo: string | null;
@@ -169,7 +172,14 @@ export function GoodsReceiptClient({
       ),
     },
     { key: 'date', header: 'Received', sortValue: (r) => new Date(r.receivedDate).getTime(), render: (r) => <span className="text-xs">{fmtDate(r.receivedDate)}</span> },
-    { key: 'source', header: 'Source', render: (r) => <span className="text-xs text-muted-foreground">{r.sourceBillId ? 'Auto - with a bill' : r.purchaseOrderId ? 'Purchase order' : 'Direct'}</span> },
+    { key: 'source', header: 'Source', render: (r) => (
+      <span className="text-xs text-muted-foreground">
+        {r.sourceBillId ? 'Auto - with a bill' : r.purchaseOrderId ? 'Purchase order' : 'Direct'}
+        {!r.sourceBillId && r.status === 'posted' && (r.billedOnId
+          ? <Link href={`/purchase/bills/${r.billedOnId}`} className="ms-1 text-brand hover:underline">· billed</Link>
+          : <span className="ms-1 text-warning">· not billed</span>)}
+      </span>
+    ) },
     { key: 'qty', header: 'Qty', align: 'end', sortValue: (r) => r.qty, render: (r) => <span className="tabular-nums">{r.qty}</span> },
     { key: 'status', header: 'Status', sortValue: (r) => r.status, render: (r) => <Badge tone={STATUS_TONE[r.status] ?? 'neutral'}>{r.status === 'posted' ? 'Posted' : 'Cancelled'}</Badge> },
     {
@@ -704,14 +714,8 @@ function ReceiveGoodsModal({
 
       <div className="grid gap-3 sm:grid-cols-2">
         <Field label="Against a purchase order" hint="Optional - leave blank for a purchase with no PO">
-          <select
-            className="w-full rounded-md border border-border bg-card px-2 py-1.5 text-sm"
-            value={orderId}
-            onChange={(e) => (e.target.value ? pickOrder(e.target.value) : clearOrder())}
-          >
-            <option value="">No purchase order</option>
-            {orders.map((o) => <option key={o.id} value={o.id}>{o.orderNo} - {o.supplierName}</option>)}
-          </select>
+          <PickList id="grn-order" label="Purchase order" value={orderId} onChange={(v) => (v ? pickOrder(v) : clearOrder())} placeholder="Order no or supplier - or leave empty"
+            options={orders.map((o) => ({ id: o.id, label: o.orderNo, sub: o.supplierName }))} />
         </Field>
 
         <Field label="Supplier">
@@ -724,14 +728,8 @@ function ReceiveGoodsModal({
               {order.supplierName}
             </p>
           ) : (
-            <select
-              className="w-full rounded-md border border-border bg-card px-2 py-1.5 text-sm"
-              value={partyId}
-              onChange={(e) => setPartyId(e.target.value)}
-            >
-              <option value="">Choose a supplier…</option>
-              {suppliers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-            </select>
+            <PickList id="grn-supplier" label="Supplier" value={partyId} onChange={setPartyId} placeholder="Type the supplier's name…"
+              options={suppliers.map((s) => ({ id: s.id, label: s.name }))} />
           )}
         </Field>
 
@@ -768,10 +766,10 @@ function ReceiveGoodsModal({
                       <p className="text-xs font-medium">{l.productName}</p>
                     ) : (
                       <>
-                        <select className={`mb-1 w-full ${input}`} value={l.productId ?? ''} onChange={(e) => pickProduct(i, e.target.value)}>
-                          <option value="">Not in catalogue -</option>
-                          {products.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-                        </select>
+                        <div className="mb-1">
+                          <PickList id={`grn-product-${i}`} label="Product" value={l.productId ?? ''} onChange={(v) => pickProduct(i, v)} placeholder="Product name or code…"
+                            options={products.map((p) => ({ id: p.id, label: p.name, sub: p.code }))} />
+                        </div>
                         <input className={`w-full ${input}`} value={l.productName}
                           onChange={(e) => setLine(i, { productName: e.target.value })} placeholder="Description" />
                       </>

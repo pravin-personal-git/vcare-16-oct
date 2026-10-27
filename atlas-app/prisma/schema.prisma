@@ -7247,6 +7247,18 @@ model PurchaseBill {
   /// half-posted bill cannot exist.
   lifecycle String @default("draft")
 
+  /// HAVE THE GOODS ARRIVED? (28 Oct 2026, Vcare) - asked once, when the
+  /// bill is entered, so stock moves exactly once:
+  ///   received    arrived with the bill - posting makes its receipt (with the
+  ///               serials typed on the lines)
+  ///   on_receipt  already received on a goods receipt - posting moves no
+  ///               stock; the receipt carries `billedOnId`
+  ///   awaited     still to come - posting books what is owed only; the store
+  ///               receives against the bill later, and it becomes `received`
+  goodsStatus    String             @default("received")
+  /// Receipts this bill pays for that were received before it (on_receipt).
+  billedReceipts GoodsReceiptNote[] @relation("GrnBilledOn")
+
   /// Charges the supplier added that are not a line item.
   freightPaise Int @default(0)
 
@@ -7324,10 +7336,14 @@ model PurchaseBillItem {
   hsnCode     String?
 
   qty           Int
+  /// Serials typed or scanned on the bill line (28 Oct 2026) - they become
+  /// the units' identities when the goods are received; fewer than the
+  /// quantity and the rest get house tags.
+  serials       String[] @default([])
   /// Excluding tax, before discount. Integer paise.
   unitCostPaise Int
-  discountPct   Decimal @default(0) @db.Decimal(5, 2)
-  taxRatePct    Decimal @default(18) @db.Decimal(5, 2)
+  discountPct   Decimal  @default(0) @db.Decimal(5, 2)
+  taxRatePct    Decimal  @default(18) @db.Decimal(5, 2)
 
   lineDiscountPaise Int @default(0)
   /// Taxable value of this line, after its discount. Snapshot of a computed
@@ -7415,6 +7431,12 @@ model GoodsReceiptNote {
   /// `cancelBill` find and reverse the right receipt without a second lookup
   /// table, and keeps an auto-created row visibly distinct from a real GRN.
   sourceBillId String?
+  /// The bill that pays for this receipt, when the goods came first and the
+  /// bill after (28 Oct 2026). Unlike `sourceBillId` (a receipt the bill
+  /// made), cancelling that bill leaves this receipt - the goods are here -
+  /// and only unlinks it.
+  billedOnId   String?
+  billedOn     PurchaseBill? @relation("GrnBilledOn", fields: [billedOnId], references: [id], onDelete: SetNull)
 
   notes String?
 
@@ -7442,6 +7464,7 @@ model GoodsReceiptNote {
   @@index([storeId, receivedDate])
   @@index([storeId, purchaseOrderId])
   @@index([storeId, legacyRef])
+  @@index([billedOnId])
 }
 
 model GoodsReceiptNoteItem {

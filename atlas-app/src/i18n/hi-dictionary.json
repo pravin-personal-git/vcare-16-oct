@@ -7144,5 +7144,17 @@
   "From a survey": "सर्वे से",
   "What goes up": "क्या लगेगा",
   "Billed / closed": "बिल बना / बंद",
-  "Closed - not billed": "बंद - बिल नहीं बना"
+  "Closed - not billed": "बंद - बिल नहीं बना",
+  "Have these goods arrived? *": "क्या यह माल आ गया है? *",
+  "Yes, they arrived with this bill": "हाँ, इस बिल के साथ आया",
+  "Already received on a goods receipt": "पहले ही माल रसीद (GRN) पर आ चुका",
+  "Not yet - still to come": "अभी नहीं - आना बाकी है",
+  "Goods awaited.": "माल आना बाकी है।",
+  "Receive the goods": "माल प्राप्त करें",
+  "Receive and put in stock": "प्राप्त करें और स्टॉक में डालें",
+  "+ New supplier - not on file yet": "+ नया सप्लायर - अभी रिकॉर्ड में नहीं",
+  "Add supplier": "सप्लायर जोड़ें",
+  "Supplier name, phone or GSTIN…": "सप्लायर का नाम, फ़ोन या GSTIN…",
+  "Product name, code or barcode…": "प्रोडक्ट का नाम, कोड या बारकोड…",
+  "What posting this bill does": "यह बिल पोस्ट करने से क्या होगा"
 }

@@ -13,7 +13,8 @@ import { Button } from '@/components/ui/Button';
 import { Modal } from '@/components/ui/Modal';
 import { Icon } from '@/components/ui/Icon';
 import { BILL_STATUS_LABEL, billStatus, outstandingPaise } from '@/lib/purchase';
-import { cancelBillAction, postBillAction } from '../actions';
+import { cancelBillAction, postBillAction, receiveBillGoodsAction } from '../actions';
+import { SerialBox } from '../NewBillModal';
 
 interface ItemVM {
   id: string;
@@ -28,6 +29,9 @@ interface ItemVM {
   taxRatePct: number;
   lineTotalPaise: number;
   movedStock: boolean;
+  /** Serial-tracked product (28 Oct 2026) - its serials are scanned on receiving. */
+  serial?: boolean;
+  serials?: string[];
 }
 
 interface PaymentVM {
@@ -50,6 +54,9 @@ interface BillVM {
   billDate: string;
   dueDate: string;
   lifecycle: string;
+  /** Have the goods arrived? received | on_receipt | awaited (28 Oct 2026). */
+  goodsStatus?: string;
+  billedReceipts?: { id: string; grnNo: string }[];
   freightPaise: number;
   subtotalPaise: number;
   itemDiscountPaise: number;
@@ -77,6 +84,8 @@ export function BillDetail({ bill, canEdit, trail = [] }: { bill: BillVM; canEdi
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showCancel, setShowCancel] = useState(false);
+  const [receiving, setReceiving] = useState(false);
+  const awaited = bill.lifecycle === 'received' && bill.goodsStatus === 'awaited';
   const [reason, setReason] = useState('');
 
   const owed = outstandingPaise({
@@ -129,6 +138,9 @@ export function BillDetail({ bill, canEdit, trail = [] }: { bill: BillVM; canEdi
                 Post it
               </Button>
             )}
+            {canEdit && awaited && (
+              <Button variant="primary" icon="package" onClick={() => setReceiving(true)}>Receive goods</Button>
+            )}
             {canEdit && bill.lifecycle === 'received' && (
               <Button variant="danger" onClick={() => setShowCancel(true)}>Cancel bill</Button>
             )}
@@ -141,6 +153,29 @@ export function BillDetail({ bill, canEdit, trail = [] }: { bill: BillVM; canEdi
         <Card className="mb-3 border-danger/30 bg-danger/[0.06] px-3 py-2.5">
           <p className="text-xs leading-relaxed text-danger">{error}</p>
         </Card>
+      )}
+
+      {/* Where the goods are (28 Oct 2026) - the bill says it once. */}
+      {bill.lifecycle !== 'cancelled' && (
+        <Card className={`mb-3 flex flex-wrap items-center gap-2 px-3 py-2.5 text-sm ${awaited ? 'border-warning/30 bg-warning/[0.06]' : ''}`}>
+          <Icon name={awaited ? 'clock' : 'package'} className={`h-4 w-4 ${awaited ? 'text-warning' : 'text-muted-foreground'}`} />
+          {bill.goodsStatus === 'awaited'
+            ? <span><strong>Goods awaited.</strong> {bill.lifecycle === 'received' ? 'You owe this bill; the stock comes in when you press Receive goods.' : 'Nothing moves until it is posted and the goods are received.'}</span>
+            : bill.goodsStatus === 'on_receipt'
+              ? <span>Goods came first, on {(bill.billedReceipts ?? []).map((g, k) => <span key={g.id}>{k ? ', ' : ''}<Link className="font-mono text-brand hover:underline" href={`/goods-receipt?open=${g.id}`}>{g.grnNo}</Link></span>)} - this bill moved no stock.</span>
+              : <span>Goods arrived with this bill{bill.lifecycle === 'draft' ? ' - stock goes in when it is posted.' : '.'}</span>}
+        </Card>
+      )}
+      {receiving && (
+        <ReceiveDialog items={bill.items} onClose={() => setReceiving(false)}
+          onSave={async (serials) => {
+            setBusy(true); setError(null);
+            const r = await receiveBillGoodsAction(bill.id, serials);
+            setBusy(false);
+            if (r.error) return r.error;
+            setReceiving(false); router.refresh();
+            return null;
+          }} busy={busy} />
       )}
 
       {bill.lifecycle === 'draft' && (
@@ -340,5 +375,36 @@ export function BillDetail({ bill, canEdit, trail = [] }: { bill: BillVM; canEdi
         </Modal>
       )}
     </>
+  );
+}
+
+/** Goods of an awaited bill arrive: the serials of each serial line, then stock in. */
+function ReceiveDialog({ items, busy, onClose, onSave }: {
+  items: ItemVM[]; busy: boolean; onClose: () => void; onSave: (serials: Record<string, string[]>) => Promise<string | null>;
+}) {
+  const [serials, setSerials] = useState<Record<string, string[]>>(() => Object.fromEntries(items.map((i) => [i.id, i.serials ?? []])));
+  const [err, setErr] = useState<string | null>(null);
+  const stock = items.filter((i) => i.productId);
+  const add = (id: string, codes: string[]) => setSerials((m) => {
+    const onBill = new Set(Object.values(m).flat().map((s) => s.toUpperCase()));
+    const fresh = codes.flatMap((c) => c.split(/[\s,;]+/)).map((c) => c.trim()).filter((c) => c && !onBill.has(c.toUpperCase()));
+    return { ...m, [id]: [...(m[id] ?? []), ...fresh] };
+  });
+  return (
+    <Modal title="Receive the goods" subtitle="Stock goes in now, at this bill's prices. Scan each box's serial." icon="package" size="lg" onClose={onClose}
+      footer={<><Button onClick={onClose} disabled={busy}>Cancel</Button><Button variant="primary" icon="check" loading={busy} onClick={async () => setErr(await onSave(serials))}>Receive and put in stock</Button></>}>
+      {err && <p role="alert" className="mb-3 rounded-sm bg-danger/10 px-3 py-2 text-xs text-danger">{err}</p>}
+      <div className="grid gap-3">
+        {stock.map((i) => (
+          <div key={i.id} className="grid gap-1.5">
+            <p className="text-sm font-medium">{i.productName} <span className="text-muted-foreground">× {i.qty}</span></p>
+            {i.serial && (
+              <SerialBox line={{ serials: serials[i.id] ?? [], qty: String(i.qty) }} left={i.qty - (serials[i.id]?.length ?? 0)}
+                onAdd={(codes) => add(i.id, codes)} onRemove={(k) => setSerials((m) => ({ ...m, [i.id]: (m[i.id] ?? []).filter((_, j) => j !== k) }))} />
+            )}
+          </div>
+        ))}
+      </div>
+    </Modal>
   );
 }

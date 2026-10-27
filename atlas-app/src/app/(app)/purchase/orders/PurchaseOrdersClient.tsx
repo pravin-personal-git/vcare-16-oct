@@ -1,5 +1,6 @@
 'use client';
 
+import { PickList } from '@/components/ui/PickList';
 import { SupplierLink } from '@/components/document/SupplierLink';
 import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
@@ -429,16 +430,8 @@ function PoFormModal({
 
       <div className="grid gap-3 sm:grid-cols-2">
         <Field label="Supplier">
-          <select
-            className="w-full rounded-md border border-border bg-card px-2 py-1.5 text-sm"
-            value={partyId}
-            onChange={(e) => setPartyId(e.target.value)}
-          >
-            <option value="">Choose a supplier…</option>
-            {suppliers.map((s) => (
-              <option key={s.id} value={s.id}>{s.name}{s.isSupplier ? '' : ' (customer)'}</option>
-            ))}
-          </select>
+          <PickList id="po-supplier" label="Supplier" value={partyId} onChange={setPartyId} placeholder="Type the supplier's name…"
+            options={suppliers.map((s) => ({ id: s.id, label: s.name, sub: s.isSupplier ? null : 'customer' }))} />
         </Field>
 
         <Field label="Order date">
@@ -475,14 +468,10 @@ function PoFormModal({
               {lines.map((l, i) => (
                 <tr key={i} className="border-b border-border last:border-0">
                   <td className="px-2 py-1.5">
-                    <select
-                      className="mb-1 w-full rounded-md border border-border bg-card px-2 py-1 text-xs"
-                      value={l.productId ?? ''}
-                      onChange={(e) => pickProduct(i, e.target.value)}
-                    >
-                      <option value="">Not in catalogue -</option>
-                      {products.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-                    </select>
+                    <div className="mb-1">
+                      <PickList id={`po-product-${i}`} label="Product" value={l.productId ?? ''} onChange={(v) => pickProduct(i, v)} placeholder="Product name or code…"
+                        options={products.map((p) => ({ id: p.id, label: p.name, sub: p.code }))} />
+                    </div>
                     <input
                       className="w-full rounded-md border border-border bg-card px-2 py-1 text-xs"
                       value={l.productName}
