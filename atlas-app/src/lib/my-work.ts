@@ -43,10 +43,36 @@ export interface WorkInput {
 export interface WorkRow extends Omit<WorkInput, 'givenAt' | 'visits'> {
   givenAt: string;
   nextVisitAt: string | null;
+  /** Missed - only where the next move is the technician's (28 Oct 2026). */
   late: boolean;
   /** Why it is late, in words for the card. */
   lateReason: string | null;
+  /** A visit of theirs booked for today, or they are on site at it now (28 Oct 2026). */
   today: boolean;
+  /**
+   * Whose move it is (28 Oct 2026), for the phone's New / Waiting filters:
+   * `new` given and not accepted; `waiting` on the customer or the office
+   * (estimate, confirmation) - nothing for the technician to do; `working`
+   * everything else that is open; `done` finished (search results only).
+   */
+  stage: WorkStage;
+  /** Working at it now - checked in, or the complaint says on site / in progress. */
+  onSite: boolean;
+}
+
+export type WorkStage = 'new' | 'working' | 'waiting' | 'done';
+
+const NEW_STATUSES = ['received', 'assigned'];
+const WAITING_STATUSES = ['awaiting_estimate', 'awaiting_customer'];
+const DONE_STATUSES = ['resolved', 'closed', 'cancelled'];
+
+/** Whose move it is, from the job's status. */
+export function workStage(kind: WorkKind, status: string): WorkStage {
+  if (kind === 'installation') return ['pending', 'rejected'].includes(status) ? 'working' : 'done';
+  if (DONE_STATUSES.includes(status)) return 'done';
+  if (NEW_STATUSES.includes(status)) return 'new';
+  if (WAITING_STATUSES.includes(status)) return 'waiting';
+  return 'working';
 }
 
 const IST_MS = 330 * 60_000;
@@ -63,16 +89,28 @@ export function workRow(j: WorkInput, now: Date = new Date()): WorkRow {
   // An installation is sent out to be fitted that day; still open on a later day is late.
   const installOverdue = j.kind === 'installation' && j.status === 'pending' && upcoming.length === 0
     && istDayKey(j.givenAt) < todayKey;
-  const late = !!missedVisit || !!j.slaMissed || installOverdue;
-  const lateReason = missedVisit
+  const stage = workStage(j.kind, j.status);
+  const onSite = j.kind === 'complaint'
+    ? ['on_site', 'in_progress'].includes(j.status) || upcoming.some((v) => !!v.checkedInAt)
+    : upcoming.some((v) => !!v.checkedInAt);
+  /*
+    Late only where the next move is theirs (28 Oct 2026). A job waiting on
+    the customer's estimate approval misses its deadline while it waits; it
+    used to turn late and sit on top of Today, burying the work that could
+    be done.
+  */
+  const theirMove = stage === 'new' || stage === 'working';
+  const late = theirMove && (!!missedVisit || !!j.slaMissed || installOverdue);
+  const lateReason = !late ? null : missedVisit
     ? 'Visit time passed'
     : j.slaMissed ? 'Deadline missed'
       : installOverdue ? 'Not finished on the day' : null;
   const next = upcoming.find((v) => v.scheduledAt.getTime() >= now.getTime() - MISSED_AFTER_MS) ?? upcoming[0] ?? null;
-  const today = upcoming.some((v) => istDayKey(v.scheduledAt) === todayKey) || istDayKey(j.givenAt) === todayKey;
+  // Today = where they go today: a visit booked for today, or on site now. Not "given today" - that is New.
+  const today = theirMove && (onSite || upcoming.some((v) => istDayKey(v.scheduledAt) === todayKey));
   const { givenAt, visits: _visits, ...rest } = j;
   void _visits;
-  return { ...rest, givenAt: givenAt.toISOString(), nextVisitAt: next ? next.scheduledAt.toISOString() : null, late, lateReason, today };
+  return { ...rest, givenAt: givenAt.toISOString(), nextVisitAt: next ? next.scheduledAt.toISOString() : null, late, lateReason, today, stage, onSite };
 }
 
 /** Late first, then by the next visit (soonest first), then urgent before normal, then newest given. */

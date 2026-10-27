@@ -52,6 +52,7 @@ export async function myWork(scope: StoreScope, userId: string, opts: { withInst
           id: true, challanNo: true, status: true, stage: true, priority: true, dispatchedAt: true, siteLocation: true,
           siteLat: true, siteLng: true,
           salesOrder: { select: { customerName: true, organizationName: true, shippingAddress: true, billingAddress: true, phone: true } },
+          customer: { select: { firstName: true, lastName: true, companyName: true, phone: true } },
           assignees: { where: { userId }, select: { assignedAt: true } },
           items: { select: { qty: true } },
           visits: { where: { technicianId: userId, ...OPEN_VISIT }, select: { id: true, technicianId: true, scheduledAt: true, status: true, checkedInAt: true } },
@@ -115,12 +116,12 @@ export async function myWork(scope: StoreScope, userId: string, opts: { withInst
       const qty = ch.items.reduce((t, i) => t + i.qty, 0);
       return workRow({
         kind: 'installation', id: ch.id, no: ch.challanNo,
-        customerName: ch.salesOrder?.organizationName || ch.salesOrder?.customerName || 'No customer on the challan',
+        customerName: (ch.customer ? person(ch.customer) : null) || ch.salesOrder?.organizationName || ch.salesOrder?.customerName || 'No customer on the challan',
         siteLocation: ch.siteLocation ?? ch.salesOrder?.shippingAddress ?? ch.salesOrder?.billingAddress ?? null,
         problem: `Installation - ${qty} item${qty === 1 ? '' : 's'}`,
         status: ch.status, statusLabel: stageLabel(ch.stage), priority: ch.priority,
         givenAt: ch.assignees[0]?.assignedAt && ch.assignees[0].assignedAt > ch.dispatchedAt ? ch.assignees[0].assignedAt : ch.dispatchedAt,
-        visits: ch.visits, customerPhone: ch.salesOrder?.phone ?? null,
+        visits: ch.visits, customerPhone: ch.customer?.phone ?? ch.salesOrder?.phone ?? null,
         lat: ch.siteLat ? Number(ch.siteLat) : null, lng: ch.siteLng ? Number(ch.siteLng) : null,
       }, now);
     }),
@@ -157,4 +158,101 @@ export async function myWork(scope: StoreScope, userId: string, opts: { withInst
   }
 
   return { jobs: sortWork(rows), schedule, now: now.toISOString() };
+}
+
+/**
+ * SEARCH, from the technician's phone (28 Oct 2026, Vcare): a complaint or an
+ * installation by its number (new or old), the customer's name or phone, or a
+ * serial on it. Their own jobs - open and finished in the last 90 days - or,
+ * when their role may see the branch, every job in it (`mine` says which, so
+ * the phone opens other people's read-only). Best 30, newest first.
+ */
+export async function searchWork(
+  scope: StoreScope, userId: string, q: string,
+  opts: { branch: boolean; withInstallations: boolean; withComplaints: boolean; now?: Date },
+): Promise<(WorkRow & { mine: boolean })[]> {
+  const s = q.trim();
+  if (s.length < 2) return [];
+  const now = opts.now ?? new Date();
+  const since = new Date(now.getTime() - 90 * 86_400_000);
+  const like = { contains: s, mode: 'insensitive' as const };
+  const digits = s.replace(/\D/g, '');
+  const person = (c: { firstName: string | null; lastName: string | null; companyName: string | null }) =>
+    c.companyName || [c.firstName, c.lastName].filter(Boolean).join(' ') || 'Customer';
+  const customerMatch = { OR: [{ firstName: like }, { lastName: like }, { companyName: like }, ...(digits.length >= 4 ? [{ phone: { contains: digits } }] : [])] };
+  const recent = { OR: [{ status: { notIn: DONE } }, { updatedAt: { gte: since } }] };
+
+  const [complaints, challans] = await Promise.all([
+    opts.withComplaints ? db.complaint.findMany({
+      where: {
+        ...scopeWhere(scope),
+        AND: [
+          recent,
+          ...(opts.branch ? [] : [{ OR: [{ assignedTechnicianId: userId }, { visits: { some: { technicianId: userId } } }] }]),
+          { OR: [{ complaintNo: like }, { legacyRef: like }, { customer: customerMatch }, { items: { some: { serialNo: like } } }] },
+        ],
+      },
+      select: {
+        id: true, complaintNo: true, legacyRef: true, description: true, status: true, priority: true, createdAt: true, assignedAt: true,
+        assignedTechnicianId: true, siteLocation: true, siteLat: true, siteLng: true,
+        customer: { select: { firstName: true, lastName: true, companyName: true, phone: true } },
+        product: { select: { productName: true } },
+        visits: { select: { technicianId: true, scheduledAt: true, status: true, checkedInAt: true, id: true } },
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 30,
+    }) : [],
+    opts.withInstallations ? db.installationChallan.findMany({
+      where: {
+        ...scopeWhere(scope), deletedAt: null,
+        ...(opts.branch ? {} : { assignees: { some: { userId } } }),
+        OR: [
+          { challanNo: like }, { legacyRef: like }, { customer: customerMatch },
+          { salesOrder: { OR: [{ orderNo: like }, { customerName: like }] } },
+          { items: { some: { serialNo: like } } },
+        ],
+      },
+      select: {
+        id: true, challanNo: true, status: true, stage: true, priority: true, dispatchedAt: true, siteLocation: true, siteLat: true, siteLng: true,
+        customer: { select: { firstName: true, lastName: true, companyName: true, phone: true } },
+        salesOrder: { select: { customerName: true, organizationName: true, shippingAddress: true, phone: true } },
+        assignees: { select: { userId: true, assignedAt: true } },
+        items: { select: { qty: true } },
+        visits: { where: { technicianId: userId, ...OPEN_VISIT }, select: { id: true, technicianId: true, scheduledAt: true, status: true, checkedInAt: true } },
+      },
+      orderBy: { dispatchedAt: 'desc' },
+      take: 30,
+    }) : [],
+  ]);
+
+  const rows = [
+    ...complaints.map((c) => ({
+      ...workRow({
+        kind: 'complaint', id: c.id, no: c.complaintNo, customerName: person(c.customer), siteLocation: c.siteLocation,
+        problem: [c.product?.productName, c.description].filter(Boolean).join(' - '),
+        status: c.status, statusLabel: OFFICE_LABEL[c.status as JobStatus] ?? c.status, priority: c.priority,
+        givenAt: c.assignedAt ?? c.createdAt,
+        visits: c.visits.filter((v) => v.technicianId === userId && v.status !== 'completed' && v.status !== 'cancelled'),
+        customerPhone: c.customer.phone, lat: c.siteLat ? Number(c.siteLat) : null, lng: c.siteLng ? Number(c.siteLng) : null,
+      }, now),
+      mine: c.assignedTechnicianId === userId || c.visits.some((v) => v.technicianId === userId),
+    })),
+    ...challans.map((ch) => {
+      const qty = ch.items.reduce((t, i) => t + i.qty, 0);
+      return {
+        ...workRow({
+          kind: 'installation', id: ch.id, no: ch.challanNo,
+          customerName: (ch.customer ? person(ch.customer) : null) || ch.salesOrder?.organizationName || ch.salesOrder?.customerName || 'No customer on the challan',
+          siteLocation: ch.siteLocation ?? ch.salesOrder?.shippingAddress ?? null,
+          problem: `Installation - ${qty} item${qty === 1 ? '' : 's'}`,
+          status: ch.status, statusLabel: stageLabel(ch.stage), priority: ch.priority,
+          givenAt: ch.dispatchedAt, visits: ch.visits, customerPhone: ch.customer?.phone ?? ch.salesOrder?.phone ?? null,
+          lat: ch.siteLat ? Number(ch.siteLat) : null, lng: ch.siteLng ? Number(ch.siteLng) : null,
+        }, now),
+        mine: ch.assignees.some((a) => a.userId === userId),
+      };
+    }),
+  ];
+  // Open before finished, then newest given.
+  return rows.sort((a, b) => (a.stage === 'done' ? 1 : 0) - (b.stage === 'done' ? 1 : 0) || (a.givenAt < b.givenAt ? 1 : -1)).slice(0, 40);
 }

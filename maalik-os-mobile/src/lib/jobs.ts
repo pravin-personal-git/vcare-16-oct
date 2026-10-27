@@ -394,6 +394,10 @@ export interface WorkRow {
   givenAt: string; nextVisitAt: string | null; late: boolean; lateReason: string | null; today: boolean;
   customerPhone?: string | null; customerPhoneDial?: string; siteLocationNavigate?: string;
   lat?: number | null; lng?: number | null;
+  /** Servers from 28 Oct 2026: whose move it is, and working at it now. */
+  stage?: 'new' | 'working' | 'waiting' | 'done'; onSite?: boolean;
+  /** Search results only: false when it is somebody else's job (opens read-only). */
+  mine?: boolean;
 }
 export interface ScheduleRow {
   /** `survey` (servers from 27 Oct 2026): a survey with no challan yet - jobId is the visit's id. */
@@ -401,4 +405,7 @@ export interface ScheduleRow {
   siteLocation: string | null; siteLocationNavigate?: string; purpose: string; scheduledAt: string; checkedIn: boolean;
   day: 'earlier' | 'today' | 'tomorrow';
 }
+/** My work's search (servers from 28 Oct 2026): number, customer, phone or serial; open and finished. */
+export const searchJobs = (q: string, branch: boolean) =>
+  authed<{ jobs: WorkRow[]; canBranch: boolean; branch: boolean }>(`/api/v1/jobs/search?q=${encodeURIComponent(q)}${branch ? '&scope=branch' : ''}`);
 export const myJobs = () => authed<{ jobs: WorkRow[]; schedule: ScheduleRow[]; now: string; canEdit: boolean }>('/api/v1/jobs/mine');

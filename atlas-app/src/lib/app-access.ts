@@ -151,7 +151,7 @@ export const ACCESS_KEYS: AccessKey[] = [
     ],
     hint: 'Simple: only their jobs (complaints and installations in one list), their visits, and clock in. Big text, Hindi first. Standard: the tiles and screens as before.',
   },
-  { key: 'layout.filter.today', group: 'layout', label: 'Filter: Today', kind: 'bool', merge: 'or', default: true, hint: 'Jobs with a visit today, or given to them today.' },
+  { key: 'layout.filter.today', group: 'layout', label: 'Filter: Today', kind: 'bool', merge: 'or', default: true, hint: 'Jobs with a visit booked for today, or the one they are on site at. (App 1.0.33 shows New, Today, Late, Waiting and All.)' },
   { key: 'layout.filter.pending', group: 'layout', label: 'Filter: Pending', kind: 'bool', merge: 'or', default: true, hint: 'Every open job not done yet, late ones on top in red.' },
   { key: 'layout.filter.week', group: 'layout', label: 'Filter: This week', kind: 'bool', merge: 'or', default: false, hint: 'Jobs with a visit in the next 7 days.' },
   { key: 'layout.filter.all', group: 'layout', label: 'Filter: All', kind: 'bool', merge: 'or', default: false, hint: 'Everything in their list, in one go.' },
