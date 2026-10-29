@@ -7,6 +7,7 @@ import { DocumentTrail } from '@/components/document/DocumentTrail';
 import { installationJobChallans } from '@/server/job-challans';
 import { catalogueOptions } from '@/server/form-options';
 import { InstallationView } from './InstallationView';
+import { OldSystemRemarks } from '@/components/document/OldSystemRemarks';
 
 /**
  * ONE INSTALLATION (11 Oct 2026, Pravin: "give them individual and detailed
@@ -42,6 +43,8 @@ export default async function InstallationPage({ params }: { params: Promise<{ i
         canIssue: ctx.permissions.has('stock.adjust'),
       }}
     />
+    {/* What the old software said on this challan's job (29 Oct 2026). */}
+    <OldSystemRemarks table="InstallationChallan" rowId={id} />
     </>
   );
 }

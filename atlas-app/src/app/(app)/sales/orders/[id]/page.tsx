@@ -8,6 +8,7 @@ import { getSalesOrderDetail } from '@/server/sales-orders';
 import { listAttachments } from '@/server/attachments';
 import { documentTrail } from '@/server/document-trail';
 import { DocumentTrail } from '@/components/document/DocumentTrail';
+import { OldSystemRemarks } from '@/components/document/OldSystemRemarks';
 import { DocumentActivity } from '@/components/document/DocumentActivity';
 import { SalesOrderDocument } from '../SalesOrderDocument';
 import { InstallationStrip } from './InstallationStrip';
@@ -40,6 +41,7 @@ export default async function SalesOrderPage({ params }: { params: Promise<{ id:
       <InstallationStrip scope={ctx.scope} orderId={id} />
       <SalesOrderDocument id={id} initial={{ order, files }} />
       <DocSerials kind="order" id={id} canEdit={ctx.scope.kind === 'single' && ctx.permissions.has('stock.adjust')} />
+      <OldSystemRemarks table="SalesOrder" rowId={id} />
       <DocumentActivity table="SalesOrder" rowId={id} />
     </>
   );

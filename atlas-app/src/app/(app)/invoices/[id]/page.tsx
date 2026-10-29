@@ -11,6 +11,7 @@ import { db } from '@/server/db';
 import { documentTrail } from '@/server/document-trail';
 import { DocumentTrail } from '@/components/document/DocumentTrail';
 import { InvoiceViewClient } from './InvoiceViewClient';
+import { OldSystemRemarks } from '@/components/document/OldSystemRemarks';
 import { DocumentActivity } from '@/components/document/DocumentActivity';
 
 export default async function InvoiceViewPage({
@@ -56,6 +57,7 @@ export default async function InvoiceViewPage({
       scopeIsAll={ctx.scope.kind === 'all'}
     />
       <DocSerials kind="invoice" id={id} canEdit={ctx.scope.kind === 'single' && ctx.permissions.has('stock.adjust')} />
+      <OldSystemRemarks table="Invoice" rowId={id} />
       <DocumentActivity table="Invoice" rowId={id} />
     </>
   );

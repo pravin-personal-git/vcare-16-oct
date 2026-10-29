@@ -11,6 +11,7 @@ import { documentTrail } from '@/server/document-trail';
 import { DocumentTrail } from '@/components/document/DocumentTrail';
 import { templateFor } from '@/server/document-templates';
 import { QuotationViewClient } from './QuotationViewClient';
+import { OldSystemRemarks } from '@/components/document/OldSystemRemarks';
 import { DocumentActivity } from '@/components/document/DocumentActivity';
 
 /**
@@ -71,6 +72,7 @@ export default async function QuotationViewPage({
       canAddProduct={ctx.scope.kind === 'single' && ctx.permissions.has('products.edit')}
       canEdit={ctx.permissions.has('quotation.create')}
     />
+      <OldSystemRemarks table="Quotation" rowId={id} />
       <DocumentActivity table="Quotation" rowId={id} />
     </>
   );

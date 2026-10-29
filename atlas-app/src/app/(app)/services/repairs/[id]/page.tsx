@@ -2,6 +2,7 @@ import { notFound } from 'next/navigation';
 import { requireContext } from '@/server/context';
 import { getRepairChallanDetail } from '@/server/complaints';
 import { RepairChallanView } from './RepairChallanView';
+import { OldSystemRemarks } from '@/components/document/OldSystemRemarks';
 import { DocumentActivity } from '@/components/document/DocumentActivity';
 
 /** One repair challan, on its own page, correctable after saving (health check I2 / SVC-3). */
@@ -16,6 +17,7 @@ export default async function RepairChallanPage({ params }: { params: Promise<{ 
       challan={{ ...c, dispatchedAt: c.dispatchedAt.toISOString(), createdAt: c.createdAt.toISOString() }}
       canEdit={ctx.scope.kind === 'single' && ctx.permissions.has('complaints.edit')}
     />
+      <OldSystemRemarks table="RepairChallan" rowId={id} />
       <DocumentActivity table="RepairChallan" rowId={id} />
     </>
   );

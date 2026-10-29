@@ -709,6 +709,8 @@ model Store {
   catalogueEvents   CatalogueEvent[]
   carts             Cart[]
 
+  legacyRemarks LegacyRemark[]
+
   @@unique([organizationId, branchCode])
   @@index([organizationId])
   @@index([legalEntityId])
@@ -12551,4 +12553,37 @@ model DocumentSend {
 
   @@index([storeId, docType, docId])
   @@index([providerRef])
+}
+
+/// WHAT THE OLD VCARE SOFTWARE SAID ON A DOCUMENT (29 Oct 2026).
+///
+/// The old app wrote every remark against an enquiry or a complaint, and named
+/// the challan it was about. The import kept the remark on the lead or the
+/// complaint but lost the challan, so a challan, quotation, order or bill
+/// opened here showed none of its history. One row per remark per document
+/// of that job, keyed on the document's OLD number (`legacyRef`), so any page
+/// finds its own with one lookup. Read-only: written by the migration, never
+/// by the app, which is why it carries no sync columns.
+model LegacyRemark {
+  id         String   @id @default(cuid())
+  storeId    String
+  store      Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  /// The document this row shows on: ECHN…, CCHN…, QTN…, ORD…, INV….
+  docRef     String
+  /// The old remark's _id - a re-run writes nothing twice.
+  sourceRef  String
+  /// The enquiry or complaint the remark was written on (ENQ…, COMP…).
+  jobRef     String
+  /// The challan the remark named, when it named one.
+  challanRef String?
+  /// Office update | Work done | For technician | Items returned | Challan rejected
+  kind       String?
+  body       String
+  /// The old user's name as text: some no longer have a login here.
+  authorName String?
+  at         DateTime
+  createdAt  DateTime @default(now())
+
+  @@unique([storeId, docRef, sourceRef])
+  @@index([storeId, docRef, at])
 }
