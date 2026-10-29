@@ -71,7 +71,8 @@ export async function getLeadDetail(
       dealStage: { select: { id: true, name: true } },
       source: { select: { name: true } },
       tags: { select: { tag: true } },
-      leadNotes: { orderBy: { createdAt: 'desc' } },
+      // Deleted notes are tombstoned (3 Oct 2026) and must stop showing.
+      leadNotes: { where: { deletedAt: null }, orderBy: { createdAt: 'desc' } },
       activities: { orderBy: { occurredAt: 'desc' }, take: LIST_MAX_ROWS },
     },
   });

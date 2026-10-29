@@ -18,7 +18,7 @@ import { filterImpliesClosed, type LeadRow } from '@/lib/lead-metrics';
 import { LeadForm } from './LeadForm';
 import { takeHandoff } from '@/components/scan/handoff';
 import type { VisitingCardScan } from '@/lib/scan/extraction';
-import { LeadDrawer } from './LeadDrawer';
+import { useRouter } from 'next/navigation';
 import { contactActions } from '@/lib/quick-actions';
 import { whatsappLink } from '@/lib/revenue';
 
@@ -42,7 +42,6 @@ interface Props {
   canCreate: boolean;
   scopeIsAll: boolean;
   /** From ?open= - opens this lead's drawer straight away. */
-  openId?: string | null;
 }
 
 const fmtDate = (d: Date | null) =>
@@ -55,7 +54,7 @@ const DEAL_TONE: Record<string, BadgeTone> = {
 };
 
 export function LeadsClient({
-  rows, paging, card, closed, rangeLabel, people, canExport, views, summary, stages, dealStages, sources, users, canCreate, scopeIsAll, openId, extraColumns,
+  rows, paging, card, closed, rangeLabel, people, canExport, views, summary, stages, dealStages, sources, users, canCreate, scopeIsAll, extraColumns,
 }: Props) {
   const list = useListParams();
   const filter = card;
@@ -68,14 +67,12 @@ export function LeadsClient({
     const h = takeHandoff('visiting_card');
     if (h) { setCardScan({ data: h.result.data, photo: h.photo }); setFormOpen(true); }
   }, [canCreate]);
-  // Seeded from ?open= so a link from a quotation lands on the lead itself
-  // rather than on an unfiltered list of every lead, which is barely better
-  // than not linking at all.
-  const [openLeadId, setOpenLeadId] = useState<string | null>(openId ?? null);
+  // Each enquiry has its own page now (29 Oct 2026); ?open= is redirected there by page.tsx.
+  const router = useRouter();
 
   // Order matches the original exactly - 02-leads.md §1.2
   const cards: KpiCard[] = [
-    { key: 'new', label: 'New Leads', count: summary.new, icon: 'sparkles', tone: 'brand' },
+    { key: 'new', label: 'New enquiries', count: summary.new, icon: 'sparkles', tone: 'brand' },
     { key: 'unassigned', label: 'Unassigned', count: summary.unassigned, icon: 'user', tone: 'warning' },
     { key: 'contacted', label: 'Contacted', count: summary.contacted, icon: 'phone' },
     { key: 'in_progress', label: 'In Progress', count: summary.in_progress, icon: 'trending-up' },
@@ -83,9 +80,9 @@ export function LeadsClient({
     { key: 'due_today', label: 'Due Today', count: summary.due_today, icon: 'clock', tone: 'warning' },
     { key: 'assigned_today', label: 'Assigned Today', count: summary.assigned_today, icon: 'user-plus' },
     { key: 'over_due', label: 'Over Due', count: summary.over_due, icon: 'alert-triangle', tone: 'danger' },
-    { key: 'all', label: 'All Leads', count: summary.all, icon: 'users',
+    { key: 'all', label: 'All enquiries', count: summary.all, icon: 'users',
       subLabel: formatCurrencyCompact(summary.open_potential_paise) },
-    { key: 'closed', label: 'Closed Leads', count: summary.closed, icon: 'lock' },
+    { key: 'closed', label: 'Closed enquiries', count: summary.closed, icon: 'lock' },
     { key: 'converted', label: 'Converted', count: summary.converted, icon: 'check-circle',
       subLabel: formatCurrencyCompact(summary.won_potential_paise), tone: 'success' },
   ];
@@ -95,8 +92,8 @@ export function LeadsClient({
   const showingClosed = closed;
 
   const columns: Column<LeadRow>[] = [
-    { key: 'leadCode', header: 'Code', width: '7rem',
-      render: (r) => <button type="button" onClick={() => setOpenLeadId(r.id)} className="font-mono text-xs font-medium text-brand hover:underline">{r.leadCode}</button>,
+    { key: 'leadCode', header: 'Enquiry', width: '7rem',
+      render: (r) => <Link href={`/crm/leads/${r.id}`} className="font-mono text-xs font-medium text-brand hover:underline">{r.leadCode}</Link>,
       sortValue: (r) => r.leadCode },
     { key: 'businessName', header: 'Business',
       render: (r) => r.businessName ?? <span className="text-muted-foreground">-</span>,
@@ -172,8 +169,8 @@ export function LeadsClient({
   return (
     <div>
       <PageHeader
-        badge="LD"
-        title="Leads"
+        badge="EN"
+        title="Enquiries"
         subtitle={
           <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
             <span>{summary.all} open</span>
@@ -192,16 +189,16 @@ export function LeadsClient({
             variant="primary"
             icon="user-plus"
             disabled={!canCreate}
-            title={scopeIsAll ? 'Select a single store to add a lead' : undefined}
+            title={scopeIsAll ? 'Select a single store to add an enquiry' : undefined}
             onClick={() => setFormOpen(true)}
           >
-            Add Lead
+            Add enquiry
           </Button>
         }
       />
 
       <FilterBar
-        searchPlaceholder="Lead code, name, business, mobile, email, city, requirement…"
+        searchPlaceholder="Enquiry number, name, business, mobile, email, city, requirement…"
         dates={{ defaultPreset: 'all', label: 'Since', activeLabel: rangeLabel }}
         people={{ label: 'Assigned to', options: people }}
         extra={
@@ -227,7 +224,7 @@ export function LeadsClient({
         rowKey={(r) => r.id}
         quickActions={(r) => contactActions(r.mobile)}
         mobileCard={(r) => (
-          <button type="button" onClick={() => setOpenLeadId(r.id)} className="block w-full text-start">
+          <Link href={`/crm/leads/${r.id}`} className="block w-full text-start">
             <div className="flex items-center justify-between gap-2">
               <span className="font-mono text-xs font-semibold text-brand">{r.leadCode}</span>
               {r.stageName && <Badge>{r.stageName}</Badge>}
@@ -236,18 +233,18 @@ export function LeadsClient({
             <p className="text-xs text-muted-foreground">
               {r.mobile} · {r.assignedToName ?? 'Unassigned'}{r.nextActionAt ? ` · next ${fmtDate(r.nextActionAt)}` : ''}
             </p>
-          </button>
+          </Link>
         )}
         emptyIcon="user-plus"
-        emptyMessage={filter ? 'No leads match this card.' : `No ${showingClosed ? 'closed' : 'open'} leads.`}
+        emptyMessage={filter ? 'No enquiries match this card.' : `No ${showingClosed ? 'closed' : 'open'} enquiries.`}
         emptyHint={
           filter
-            ? 'Clear the card to see every lead.'
-            : 'Add one from the button above. Calls, WhatsApp messages and notes are all logged against the lead.'
+            ? 'Clear the card to see every enquiry.'
+            : 'Add one from the button above. Calls, WhatsApp messages and notes are all logged against the enquiry.'
         }
         /* Inherits the shared sizes - this list holds every lead now. */
         actions={[
-          { label: 'Open', icon: 'eye', onSelect: (r) => setOpenLeadId(r.id) },
+          { label: 'Open', icon: 'eye', onSelect: (r) => router.push(`/crm/leads/${r.id}`) },
           {
             label: 'Call', icon: 'phone', separatorBefore: true,
             onSelect: (r) => window.open(`tel:${r.mobile.replace(/\s/g, '')}`),
@@ -262,23 +259,13 @@ export function LeadsClient({
       <p className="mt-3 flex items-start gap-2 rounded-lg border border-border bg-card px-3 py-2.5 text-xs text-muted-foreground shadow-card">
         <Icon name="info" className="mt-0.5 h-4 w-4 shrink-0 text-info" />
         <span>
-          Converted leads live under <strong>Closed Leads</strong> and{' '}
-          <strong>Converted</strong> - a converted lead is closed by definition,
+          Converted enquiries live under <strong>Closed enquiries</strong> and{' '}
+          <strong>Converted</strong> - a converted enquiry is closed by definition,
           so it is not in the Active view. Bulk upload (A045), the twelve
           settings tabs (A047) and rule-based assignment (A048) are not built
           yet.
         </span>
       </p>
-
-      {openLeadId && (
-        <LeadDrawer
-          leadId={openLeadId}
-          stages={stages}
-          dealStages={dealStages}
-          users={users}
-          onClose={() => setOpenLeadId(null)}
-        />
-      )}
 
       {formOpen && (
         <LeadForm

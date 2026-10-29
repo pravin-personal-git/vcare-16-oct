@@ -490,10 +490,10 @@ export function LeadDrawer({ leadId, stages, dealStages, users, onClose, canEdit
 
 const fieldClass = 'w-full rounded border border-border bg-background px-2.5 py-2 text-sm text-foreground';
 
-function EditLeadDialog({
+export function EditLeadDialog({
   lead, onClose, onSaved,
 }: {
-  lead: LeadDetail;
+  lead: Pick<LeadDetail, 'id' | 'editable'>;
   onClose: () => void;
   onSaved: () => void;
 }) {

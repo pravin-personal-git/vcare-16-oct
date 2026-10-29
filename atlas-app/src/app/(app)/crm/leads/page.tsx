@@ -7,6 +7,7 @@ import { parseGridQuery, slicePage } from '@/lib/server-grid';
 import { db } from '@/server/db';
 import { scopeWhere } from '@/server/store-scope';
 import Link from 'next/link';
+import { redirect } from 'next/navigation';
 import { newShopRequestCount } from '@/server/shop-requests';
 import { LeadsClient } from './LeadsClient';
 
@@ -14,6 +15,8 @@ export default async function LeadsPage({ searchParams }: {
   searchParams: Promise<Record<string, string | undefined>>;
 }) {
   const sp = await searchParams;
+  // Links that used to open the pop-up (?open=) now open the enquiry's own page.
+  if (sp.open) redirect(`/crm/leads/${encodeURIComponent(sp.open)}`);
   const ctx = await requireContext();
   const where = scopeWhere(ctx.scope);
 
@@ -54,7 +57,6 @@ export default async function LeadsPage({ searchParams }: {
     )}
     <LeadsClient
       extraColumns={extraColumns}
-      openId={sp.open ?? null}
       rows={page.rows}
       paging={page.paging}
       summary={list.summary}
