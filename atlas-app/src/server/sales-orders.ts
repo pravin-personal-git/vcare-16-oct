@@ -17,6 +17,7 @@ import {
   type PaymentStatus,
 } from '@/lib/sales-order-status';
 import { applyMovements } from './stock';
+import { shelveUnit, unitsOnRef } from './serial-links';
 import { countsAsRevenue } from '@/lib/revenue';
 import { createReceipt, type ReceiptMethod } from './receipts';
 import { formatCurrency } from '@/lib/format';
@@ -552,6 +553,21 @@ export async function moveFulfilment(
       // back from an installation (R2).
       const lines = order.items.filter((i) => i.productId && (stockOut || i.qty - i.returnedQty > 0));
       const sign = stockOut ? -1 : 1;
+      const ref = { refType: 'SalesOrder', refId: order.id, refNo: order.orderNo };
+      // Going out: the serials scanned on its installation challan go, not the
+      // oldest on the shelf. Coming back: exactly the units it sent (29 Oct 2026).
+      const scanned = new Map<string, string[]>();
+      if (stockOut) {
+        for (const it of await tx.installationChallanItem.findMany({
+          where: { challan: { salesOrderId: order.id, storeId: order.storeId }, stockUnitId: { not: null }, productId: { not: null } },
+          select: { productId: true, stockUnitId: true },
+        })) scanned.set(it.productId!, [...(scanned.get(it.productId!) ?? []), it.stockUnitId!]);
+      } else {
+        for (const units of (await unitsOnRef(tx, [order.storeId], ref, ['with_customer'])).values()) {
+          for (const u of units) await shelveUnit(tx, order.storeId, userId, { unitId: u.id, ref, invoiceId: null, from: ['with_customer'], note: `${order.orderNo} returned.` });
+        }
+      }
+      const billed = stockOut ? await tx.invoice.findFirst({ where: { salesOrderId: order.id, storeId: order.storeId, lifecycle: { not: 'cancelled' } }, select: { id: true } }) : null;
 
       await applyMovements(
         tx,
@@ -566,7 +582,10 @@ export async function moveFulfilment(
           refNo: order.orderNo,
           // Rule 4: which physical items went, and to whom. `applyMovements`
           // picks them oldest-first and records what it could not name.
-          partyId: order.partyId,
+          // Coming back the units were shelved above, so none is guessed here.
+          partyId: stockOut ? order.partyId : null,
+          ...(stockOut && scanned.get(i.productId!)?.length ? { stockUnitIds: scanned.get(i.productId!) } : {}),
+          ...(billed ? { invoiceId: billed.id } : {}),
         })),
       );
 
@@ -1144,6 +1163,10 @@ export async function cancelSalesOrder(
     if (updated.count === 0) throw new Error(`${order.orderNo} was cancelled by someone else.`);
 
     if (toReturn.length > 0) {
+      const ref = { refType: 'SalesOrder', refId: order.id, refNo: order.orderNo };
+      for (const units of (await unitsOnRef(tx, [storeId], ref, ['with_customer'])).values()) {
+        for (const u of units) await shelveUnit(tx, storeId, userId, { unitId: u.id, ref, invoiceId: null, from: ['with_customer'], note: `Order cancelled - ${reason.trim()}` });
+      }
       await applyMovements(
         tx,
         storeId,
@@ -1156,8 +1179,8 @@ export async function cancelSalesOrder(
           refId: order.id,
           refNo: order.orderNo,
           note: `Order cancelled - ${reason.trim()}`,
-          // Puts this customer's own units back, not somebody else's.
-          partyId: order.partyId,
+          // Its own units were shelved above - nothing more is guessed.
+          partyId: null,
         })),
       );
       await tx.salesOrderItem.updateMany({

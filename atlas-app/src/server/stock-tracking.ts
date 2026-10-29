@@ -133,5 +133,17 @@ export async function applyTrackingChange(
   }));
 
   result.changed = patches.length;
+
+  // Now kept by serial, but already out on jobs with no serial (29 Oct 2026):
+  // say where, so they get named rather than found later.
+  const toSerial = patches.filter((x) => x.trackingMode === 'serial').map((x) => x.id);
+  if (toSerial.length) {
+    const out = await db.jobChallanLine.findMany({
+      where: { productId: { in: toSerial }, qtyIssued: { gt: 0 }, challan: { storeId, status: 'issued' } },
+      select: { qtyIssued: true, qtyReturned: true, stockUnitIds: true },
+    });
+    const blind = out.reduce((n, l) => n + Math.max(0, l.qtyIssued - l.qtyReturned - l.stockUnitIds.length), 0);
+    if (blind > 0) result.warnings.push(`${blind} of these ${blind === 1 ? 'is' : 'are'} out on jobs with no serial - Stock → Checks lists them; use Add serial on each job.`);
+  }
   return result;
 }

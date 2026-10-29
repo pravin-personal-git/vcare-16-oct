@@ -198,6 +198,9 @@ export async function returnUnitsToStock(
 ): Promise<BindResult> {
   const want = Math.abs(Math.trunc(input.qty));
   if (want === 0) return { bound: 0, short: 0, serials: [] };
+  // No document and no customer named: any customer's unit would do, so none
+  // does (29 Oct 2026 - a return used to shelve somebody else's camera).
+  if (!input.fromInvoiceId && !input.partyId) return { bound: 0, short: want, serials: [] };
 
   /**
    * Which document they came back from, when the caller knows.

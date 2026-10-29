@@ -13,7 +13,7 @@ import {
   editJobChallanAction, logFaultyPartAction, raiseJobChallanAction, receiveFaultyPartAction, returnUnusedPartsAction, withdrawJobChallanAction,
 } from '../../actions';
 import { installEditChallanAction, installRaiseChallanAction, installWithdrawChallanAction } from '../../installations/actions';
-import { GdnFix, IssueParts, ReceiveBack, ReceiveWithSerial, ShelfUnits, SwapSerial } from '@/components/services/GdnFix';
+import { AddSerial, GdnFix, IssueParts, ReceiveBack, ReceiveWithSerial, ShelfUnits, SwapSerial } from '@/components/services/GdnFix';
 
 /**
  * Parts on a job (workflow slice 4, spec §4.4): job challans with their
@@ -32,6 +32,9 @@ export interface FaultyVM {
   caseNo?: string | null;
   caseId?: string | null;
 }
+
+/** Parts of a serial line out with the customer that no serial names. */
+const unnamed = (l: ChallanVM['lines'][number]) => (l.serial ? Math.max(0, l.qtyIssued - l.qtyReturned - (l.units ?? []).length) : 0);
 
 const STATUS: Record<string, { label: string; tone: BadgeTone }> = {
   pending_approval: { label: 'Waiting for approval', tone: 'warning' },
@@ -86,7 +89,7 @@ export function JobParts({ complaintId, installationChallanId, challans, faulty,
               <li key={l.id} className="flex flex-wrap items-center gap-2">
                 <span>{l.productName}: <strong className="tabular-nums">{l.qtyReturnPending}</strong> unused</span>
                 <span className="font-mono text-xs text-muted-foreground">{c.gdnNos[0] ?? c.challanNo}</span>
-                {(canEdit || canIssue) && <ReceiveBack lineId={l.id} qty={l.qtyReturnPending} serial={l.serial} units={l.units} />}
+                {(canEdit || canIssue) && <ReceiveBack lineId={l.id} qty={l.qtyReturnPending} serial={l.serial} units={l.units} unnamed={unnamed(l)} />}
               </li>
             ))}
           </ul>
@@ -134,6 +137,13 @@ export function JobParts({ complaintId, installationChallanId, challans, faulty,
                   )}
                   {canIssue && c.status === 'issued' && l.serial && l.productId && (l.units ?? []).length > 0 && (
                     <SwapSerial lineId={l.id} productId={l.productId} productName={l.productName} units={l.units ?? []} />
+                  )}
+                  {/* Out with no serial on record - counted by quantity when the GDN was made (29 Oct 2026). */}
+                  {c.status === 'issued' && l.serial && unnamed(l) > 0 && (
+                    <span className="flex flex-wrap items-center gap-1.5">
+                      <Badge tone="warning">{unnamed(l)} serial{unnamed(l) === 1 ? '' : 's'} not named</Badge>
+                      {canIssue && l.productId && <AddSerial lineId={l.id} productId={l.productId} productName={l.productName} missing={unnamed(l)} />}
+                    </span>
                   )}
                 </li>
               ))}

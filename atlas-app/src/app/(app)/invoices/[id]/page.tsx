@@ -1,3 +1,4 @@
+import { DocSerials } from '@/components/stock/DocSerials';
 import { notFound } from 'next/navigation';
 import { requireContext } from '@/server/context';
 import { whatsappPanel } from '@/server/document-send';
@@ -54,6 +55,7 @@ export default async function InvoiceViewPage({
       canSeeCosts={ctx.permissions.has('invoice.costTrail')}
       scopeIsAll={ctx.scope.kind === 'all'}
     />
+      <DocSerials kind="invoice" id={id} canEdit={ctx.scope.kind === 'single' && ctx.permissions.has('stock.adjust')} />
       <DocumentActivity table="Invoice" rowId={id} />
     </>
   );

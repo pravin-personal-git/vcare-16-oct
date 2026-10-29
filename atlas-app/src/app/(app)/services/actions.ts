@@ -13,7 +13,8 @@ import {
 } from '@/server/complaints';
 import { resolveCoverageFor } from '@/server/amc';
 import { friendlyError } from '@/lib/friendly-error';
-import { cancelJobIssue, correctJobIssue, editJobChallan, issueJobChallan, serialChoices, logFaultyPart, raiseJobChallan, receiveFaultyPart, receiveReturnedParts, requestPartsReturn, returnUnusedParts, swapIssuedUnit, unitsOnShelf, withdrawJobChallan, type ChallanLineInput } from '@/server/job-challans';
+import { SerialLinkError } from '@/server/serial-links';
+import { cancelJobIssue, correctJobIssue, editJobChallan, issueJobChallan, serialChoices, logFaultyPart, raiseJobChallan, receiveFaultyPart, nameIssuedUnit, receiveReturnedParts, requestPartsReturn, returnUnusedParts, swapIssuedUnit, unitsOnShelf, withdrawJobChallan, type ChallanLineInput } from '@/server/job-challans';
 import { customerLinkToken, sendEstimate, type EstimateLine } from '@/server/job-customer';
 import { billJob, setJobBill, waiveJobBilling } from '@/server/job-billing';
 import { addComplaintItem, cancelComplaintItem, listCustomerEquipment, pickUpItems, requestWarrantyVoid, type ComplaintItemInput } from '@/server/complaint-items';
@@ -488,6 +489,19 @@ export async function swapIssuedUnitAction(lineId: string, fromUnitId: string, t
     return { ok: true };
   } catch (e) {
     return { error: friendlyError(e, e instanceof ComplaintError) };
+  }
+}
+
+/** Name the serial of a part that left on a GDN without one (29 Oct 2026). */
+export async function nameIssuedUnitAction(lineId: string, unitId: string, reason: string): Promise<ActionState & { serialNo?: string }> {
+  try {
+    const ctx = await requireContext();
+    if (!ctx.permissions.has('stock.adjust')) return { error: 'Adding a serial to a GDN needs stock rights (Roles > Stock: Edit).' };
+    const serialNo = await nameIssuedUnit(ctx.scope, lineId, unitId, reason, ctx.user.id);
+    refresh();
+    return { ok: true, serialNo };
+  } catch (e) {
+    return { error: friendlyError(e, e instanceof ComplaintError || e instanceof SerialLinkError) };
   }
 }
 

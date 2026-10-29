@@ -1,3 +1,4 @@
+import { DocSerials } from '@/components/stock/DocSerials';
 import { ProductLink } from '@/components/document/ProductLink';
 import { CustomerLink } from '@/components/document/CustomerLink';
 import Link from 'next/link';
@@ -75,6 +76,7 @@ export default async function ReturnDetailPage({
         }
       />
       <DocumentTrail steps={trail} />
+      <div className="mb-3"><DocSerials kind="sales_return" id={r.id} canEdit={ctx.scope.kind === 'single' && ctx.permissions.has('stock.adjust')} /></div>
 
       {r.lifecycle === 'cancelled' && r.cancelReason && (
         <Card className="mb-3 flex items-start gap-2.5 border-danger/30 bg-danger/[0.06] px-3 py-2.5">

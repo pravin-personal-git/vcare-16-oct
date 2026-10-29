@@ -2,6 +2,8 @@ import 'server-only';
 import { db } from './db';
 import { scopeWhere, type StoreScope } from './store-scope';
 import { FEED_MAX_ROWS, LIST_MAX_ROWS } from '@/lib/list-limits';
+import { docHref } from '@/lib/doc-href';
+import { GUESSED_NOTE } from './serial-links';
 
 /**
  * One physical item's whole life, in order (1 Oct 2026).
@@ -294,6 +296,37 @@ export async function productJourney(
       amountPaise: null,
       detail: [where, c.description?.slice(0, 80)].filter(Boolean).join(' · ') || null,
       open: !done,
+    });
+  }
+
+  // ---- every move the unit made, with its document (29 Oct 2026) -------
+  // A GDN, a dispatch, a return, the supplier: the unit's own events, so the
+  // trail says the same as the complaint, the GDN and the bill.
+  const events = await db.stockUnitEvent.findMany({
+    where: { unitId: unit.id, ...scopeWhere(scope), eventType: 'status', deletedAt: null },
+    orderBy: { createdAt: 'asc' }, take: FEED_MAX_ROWS,
+    select: { id: true, fromStatus: true, toStatus: true, partyId: true, refType: true, refId: true, refNo: true, note: true, createdAt: true },
+  });
+  const partyIds = [...new Set(events.map((e) => e.partyId).filter((x): x is string => !!x))];
+  const names = new Map((partyIds.length ? await db.party.findMany({ where: { id: { in: partyIds } }, select: { id: true, companyName: true, firstName: true, lastName: true } }) : [])
+    .map((p) => [p.id, p.companyName || [p.firstName, p.lastName].filter(Boolean).join(' ')]));
+  for (const e of events) {
+    const to = e.toStatus;
+    // The sale has its own stage; holding a unit for a challan is not a move.
+    if ((e.refType === 'invoice' && to === 'with_customer') || to === 'reserved' || e.fromStatus === 'reserved' && to === 'in_stock') continue;
+    const step: [StageKind, string] | null =
+      to === 'with_customer' ? ['delivered', e.refType === 'MaterialIssue' ? 'Went out on a job' : e.refType === 'SalesOrder' ? 'Dispatched to the customer' : 'Went to the customer']
+        : to === 'with_supplier' ? ['returned', 'Sent to the supplier']
+          : to === 'in_stock' ? ['returned', 'Back on the shelf']
+            : to === 'in_repair' ? ['serviced', 'With us for repair']
+              : to === 'lost' ? ['returned', 'Not found on the shelf']
+                : to === 'scrapped' ? ['returned', 'Scrapped']
+                  : to === 'supplier_kept' ? ['returned', 'Kept by the supplier'] : null;
+    if (!step) continue;
+    stages.push({
+      kind: step[0], title: step[1], party: e.partyId ? names.get(e.partyId) ?? null : null, at: e.createdAt,
+      docNo: e.refNo, docHref: docHref(e.refType, e.refId, e.refNo), amountPaise: null,
+      detail: e.note === GUESSED_NOTE ? 'Picked by Atlas (oldest first) - not checked on the document yet' : e.note, open: e.note === GUESSED_NOTE,
     });
   }
 

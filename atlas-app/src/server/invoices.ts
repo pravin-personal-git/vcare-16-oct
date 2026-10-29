@@ -20,6 +20,7 @@ import { postCogsMovement } from './cogs';
 import { ACCOUNT, splitRevenue } from '@/lib/service-revenue';
 import { LIST_MAX_ROWS } from '@/lib/list-limits';
 import { serialsByLine } from '@/lib/invoice-serials';
+import { unitsOnRef } from './serial-links';
 import {
   amountDuePaise, canCancel, canEdit, canRecordPayment, countByStatus, dueDateFrom,
   invoiceStatus, type InvoiceLifecycle, type InvoiceStatus,
@@ -346,6 +347,10 @@ export async function convertOrderToInvoice(
       where: { id: order.id },
       data: { isInvoiced: true, invoiceId: invoice.id },
     });
+    // The serials the order already sent are sold on this bill - it prints them
+    // and the warranty runs from it (29 Oct 2026).
+    const sent = [...(await unitsOnRef(tx, [storeId], { refType: 'SalesOrder', refId: order.id }, ['with_customer'])).values()].flat();
+    if (sent.length) await tx.stockUnit.updateMany({ where: { id: { in: sent.map((u) => u.id) }, invoiceId: null }, data: { invoiceId: invoice.id } });
 
     return invoice;
   });

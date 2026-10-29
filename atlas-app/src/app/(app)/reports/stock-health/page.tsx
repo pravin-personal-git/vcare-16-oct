@@ -4,6 +4,8 @@ import { stockHealth } from '@/server/stock-health';
 import { StockHealthClient } from './StockHealthClient';
 import { StockTabs } from '@/components/stock/StockTabs';
 import { serialStockGaps } from '@/server/stock-units';
+import { serialChecks } from '@/server/serial-links';
+import { SerialChecksPanel } from '@/components/stock/SerialChecksPanel';
 
 /**
  * Stock checks (2 Oct 2026).
@@ -21,7 +23,7 @@ export default async function StockHealthPage() {
   const ctx = await requireContext();
   if (!ctx.permissions.has('stock.view')) redirect('/dashboard');
 
-  const [health, gaps] = await Promise.all([stockHealth(ctx.scope, ctx.features), serialStockGaps(ctx.scope)]);
+  const [health, gaps, serials] = await Promise.all([stockHealth(ctx.scope, ctx.features), serialStockGaps(ctx.scope), serialChecks(ctx.scope)]);
 
   return (
     <>
@@ -37,6 +39,7 @@ export default async function StockHealthPage() {
         },
       }}
     />
+    <SerialChecksPanel {...serials} />
     </>
   );
 }

@@ -6,6 +6,7 @@ import { scopeForWrite, scopeWhere, type StoreScope } from './store-scope';
 import { ComplaintError, logActivity } from './complaints';
 import { allocateDocumentNumber } from './allocate-document-number';
 import { applyMovements, type MovementInput } from './stock';
+import { sendUnit } from './serial-links';
 import { raiseApproval, openApprovalRequest, decideApprovalStep, HierarchyError } from './hierarchy';
 import { postJournalEntry } from './ledger';
 import { costsFor } from './product-cost';
@@ -732,7 +733,7 @@ async function loadLine(scope: StoreScope, lineId: string) {
     where: { id: lineId, challan: scopeWhere(scope) },
     include: {
       product: { select: { productName: true, trackingMode: true } },
-      challan: { select: { id: true, challanNo: true, ...jobSelect, issues: { where: { cancelledAt: null }, select: { id: true, gdnNo: true }, take: 1 } } },
+      challan: { select: { id: true, challanNo: true, status: true, ...jobSelect, issues: { where: { cancelledAt: null }, select: { id: true, gdnNo: true }, take: 1 } } },
     },
   });
   if (!line) throw new ComplaintError('That challan line is not in your scope.');
@@ -778,11 +779,20 @@ async function putBack(
 ): Promise<string[]> {
   if (line.product.trackingMode === 'serial') {
     const ids = [...new Set(unitIds ?? [])];
-    if (ids.length !== n) throw new ComplaintError(`Pick the ${n} serial number${n === 1 ? '' : 's'} of ${line.product.productName} that came back.`);
+    // Parts that left with no serial (counted by quantity then) come back by
+    // count - only the named ones have to be picked (29 Oct 2026).
+    const byCount = n - ids.length;
+    if (byCount < 0 || byCount > unnamedOut(line)) {
+      throw new ComplaintError(`Pick the ${n - Math.min(n, unnamedOut(line))} serial number${n - Math.min(n, unnamedOut(line)) === 1 ? '' : 's'} of ${line.product.productName} that came back.`);
+    }
     if (ids.some((u) => !line.stockUnitIds.includes(u))) throw new ComplaintError('A serial picked was not issued on this job.');
-    await applyMovements(tx, storeId, userId, ids.map((u) => ({
-      productId: line.productId, qty: 1, reason: 'job_return' as const, refType: 'JobChallanLine', refId: line.id, refNo, stockUnitId: u, note,
-    })));
+    await applyMovements(tx, storeId, userId, [
+      ...ids.map((u) => ({
+        productId: line.productId, qty: 1, reason: 'job_return' as const, refType: 'JobChallanLine', refId: line.id, refNo, stockUnitId: u, note,
+      })),
+      // No customer named, so no unit is guessed back - see returnUnitsToStock.
+      ...(byCount > 0 ? [{ productId: line.productId, qty: byCount, reason: 'job_return' as const, refType: 'JobChallanLine', refId: line.id, refNo, warehouseId, note: `${note} (no serial on the GDN)` }] : []),
+    ]);
     await setUnits(tx, storeId, ids, 'with_customer', 'in_stock', null, { refType: 'JobChallanLine', refId: line.id, refNo }, userId);
     await tx.jobChallanLine.update({ where: { id: line.id }, data: { stockUnitIds: line.stockUnitIds.filter((u) => !ids.includes(u)) } });
     return ids;
@@ -794,7 +804,8 @@ async function putBack(
 }
 
 /** Where a line's parts go back to - read before the transaction. */
-const backTo = (line: Line) => (line.product.trackingMode === 'serial' ? Promise.resolve(null) : issueWarehouse(line.challan.issues[0]?.id, line.productId));
+// Named serial units carry their own place; the warehouse is for quantity, and for serial parts that left with no serial (29 Oct 2026).
+const backTo = (line: Line) => issueWarehouse(line.challan.issues[0]?.id, line.productId);
 
 /** The cost of n parts of a line, at what they were issued at (older lines: today's cost). */
 async function lineCost(scope: StoreScope, line: { productId: string; unitCostPaise: number | null; costAccount: string | null }, n: number) {
@@ -1141,7 +1152,7 @@ export async function swapIssuedUnit(
   if (!line.stockUnitIds.includes(fromUnitId)) throw new ComplaintError('That serial was not issued on this line.');
   if (fromUnitId === toUnitId) throw new ComplaintError('Pick a different serial number.');
   const [from, to] = await Promise.all([
-    db.stockUnit.findFirst({ where: { id: fromUnitId, storeId }, select: { serialNo: true, status: true } }),
+    db.stockUnit.findFirst({ where: { id: fromUnitId, storeId }, select: { serialNo: true, status: true, invoiceId: true } }),
     db.stockUnit.findFirst({ where: { id: toUnitId, storeId, productId: line.productId }, select: { serialNo: true, status: true } }),
   ]);
   if (!from || from.status !== 'with_customer') throw new ComplaintError('The serial on the GDN is not out with the customer any more - it was returned or moved.');
@@ -1149,16 +1160,53 @@ export async function swapIssuedUnit(
   const { partyId } = await costTarget(scope, c);
   const ref = { refType: 'MaterialIssue', refId: issue.id, refNo: issue.gdnNo };
   await db.$transaction(async (tx) => {
-    const moved = await tx.stockUnit.updateMany({ where: { id: toUnitId, status: 'in_stock' }, data: { status: 'with_customer', partyId } });
+    // The bill goes with the serial (29 Oct 2026) - it used to stay on the unit that came back.
+    const moved = await tx.stockUnit.updateMany({ where: { id: toUnitId, status: 'in_stock' }, data: { status: 'with_customer', partyId, ...(from.invoiceId ? { invoiceId: from.invoiceId } : {}) } });
     if (moved.count !== 1) throw new ComplaintError('That unit was taken just now - pick another.');
     await tx.stockUnitEvent.create({ data: { storeId, unitId: toUnitId, eventType: 'status', fromStatus: 'in_stock', toStatus: 'with_customer', partyId, ...ref, createdBy: userId } });
     await setUnits(tx, storeId, [fromUnitId], 'with_customer', 'in_stock', null, ref, userId);
+    if (from.invoiceId) await tx.stockUnit.update({ where: { id: fromUnitId }, data: { invoiceId: null } });
     await applyMovements(tx, storeId, userId, [
       { productId: line.productId, qty: 1, reason: 'job_return', refType: 'JobChallanLine', refId: line.id, refNo: issue.gdnNo, stockUnitId: fromUnitId, note: `Serial changed on ${issue.gdnNo}: ${why}` },
       { productId: line.productId, qty: -1, reason: 'job_issue', ...ref, stockUnitId: toUnitId, partyId, note: `Serial changed on ${issue.gdnNo}: ${why}` },
     ]);
     await tx.jobChallanLine.update({ where: { id: line.id }, data: { stockUnitIds: line.stockUnitIds.map((u) => (u === fromUnitId ? toUnitId : u)) } });
     await say(tx, c, 'challan_changed', userId, { body: `${issue.gdnNo}: ${line.product.productName} serial changed ${from.serialNo} → ${to.serialNo}. Reason: ${why}` });
+  });
+}
+
+/** How many of a line's parts are out with no serial on record (29 Oct 2026). */
+export const unnamedOut = (l: { qtyIssued: number; qtyReturned: number; stockUnitIds: string[] }) => Math.max(0, l.qtyIssued - l.qtyReturned - l.stockUnitIds.length);
+
+/**
+ * Name the serial of a part that left on a GDN without one (29 Oct 2026, Vcare):
+ * the product was counted by quantity then, or nobody picked. The unit goes to
+ * the job's customer and the job's bill, its history gets the GDN, and the line
+ * names it - so the complaint, the GDN, the bill and Product History agree.
+ * Stock does not move: the GDN already took it off the shelf.
+ */
+export async function nameIssuedUnit(scope: StoreScope, lineId: string, unitId: string, reason: string, userId: string): Promise<string> {
+  const storeId = scopeForWrite(scope);
+  const why = reason.trim();
+  if (!why) throw new ComplaintError('Say why the serial was not on the GDN - it is kept on the job.');
+  const line = await loadLine(scope, lineId);
+  const c = line.challan;
+  const issue = c.issues[0];
+  if (!issue || c.status !== 'issued') throw new ComplaintError('This challan has no GDN yet - pick the serial when issuing.');
+  if (line.product.trackingMode !== 'serial') throw new ComplaintError(`${line.product.productName} is counted by quantity - set it to serial numbers (Products → Tracking) first.`);
+  if (unnamedOut(line) <= 0) throw new ComplaintError(`Every ${line.product.productName} on ${issue.gdnNo} already has its serial - change one instead.`);
+  if (line.stockUnitIds.includes(unitId)) throw new ComplaintError('That serial is already on this line.');
+  const elsewhere = await db.jobChallanLine.findFirst({ where: { stockUnitIds: { has: unitId }, challan: scopeWhere(scope) }, select: { challan: { select: { challanNo: true } } } });
+  if (elsewhere) throw new ComplaintError(`That serial is already on ${elsewhere.challan.challanNo}.`);
+  const { partyId } = await costTarget(scope, c);
+  const bill = c.complaint ? (await db.complaint.findFirst({ where: { id: c.complaint.id }, select: { invoiceId: true } }))?.invoiceId ?? null : null;
+  const ref = { refType: 'MaterialIssue', refId: issue.id, refNo: issue.gdnNo };
+  return db.$transaction(async (tx) => {
+    const serial = await sendUnit(tx, storeId, userId, { unitId, productId: line.productId, to: 'with_customer', partyId, invoiceId: bill, ref, note: `Serial named after ${issue.gdnNo}: ${why}` });
+    const fresh = await tx.jobChallanLine.updateMany({ where: { id: line.id, version: line.version }, data: { stockUnitIds: [...line.stockUnitIds, unitId], version: { increment: 1 } } });
+    if (fresh.count !== 1) throw new ComplaintError('This line changed just now - open the job again.');
+    await say(tx, c, 'challan_changed', userId, { body: `${issue.gdnNo}: serial ${serial} added for ${line.product.productName}. Reason: ${why}` });
+    return serial;
   });
 }
 

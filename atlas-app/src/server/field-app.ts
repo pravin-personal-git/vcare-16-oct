@@ -4,6 +4,7 @@ import { scopeWhere, type StoreScope } from './store-scope';
 import { applyMovements } from './stock';
 import { LIST_MAX_ROWS } from '@/lib/list-limits';
 import { INSTALL_STAGES, stageLabel } from '@/lib/installation-stages';
+import { settleOrderUnit } from './serial-links';
 
 /**
  * What a technician sees on their phone.
@@ -191,12 +192,13 @@ export async function technicianInstallation(scope: StoreScope, challanId: strin
 export async function scanUnitOntoChallan(
   scope: StoreScope,
   input: { challanItemId: string; serialNo: string },
+  userId: string,
 ) {
   const item = await db.installationChallanItem.findFirst({
     where: { id: input.challanItemId, challan: { ...scopeWhere(scope) } },
     select: {
       id: true, productId: true, productName: true, stockUnitId: true,
-      challan: { select: { id: true, challanNo: true, storeId: true } },
+      challan: { select: { id: true, challanNo: true, storeId: true, salesOrderId: true } },
     },
   });
   if (!item) throw new Error('That line is not in your scope.');
@@ -224,6 +226,11 @@ export async function scanUnitOntoChallan(
     select: { challan: { select: { challanNo: true } } },
   });
   if (already) throw new Error(`${serial} is already on ${already.challan.challanNo}.`);
+  // The order may have sent stock already: the scanned unit becomes the one it
+  // sent, so the customer, the bill and Product History name it (29 Oct 2026).
+  if (item.challan.salesOrderId && unit.id !== item.stockUnitId) {
+    await settleOrderUnit(scope, item.challan.salesOrderId, item.productId, unit.id, item.stockUnitId, `Scanned at the site on ${item.challan.challanNo}`, userId);
+  }
 
   return db.installationChallanItem.update({
     where: { id: item.id },

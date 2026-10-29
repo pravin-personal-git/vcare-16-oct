@@ -16,6 +16,7 @@ export default async function PurchaseReturnPage() {
       }))}
       canEdit={ctx.permissions.has('purchase.edit')}
       canIssueDebitNote={ctx.permissions.has('accounts.edit')}
+      canSerials={ctx.permissions.has('stock.adjust')}
     />
   );
 }

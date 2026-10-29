@@ -67,7 +67,7 @@ export async function POST(req: Request, { params }: Params) {
       const challanItemId = str(b.challanItemId, 60);
       const serialNo = str(b.serialNo, 120);
       if (!challanItemId || !serialNo) throw new V1Error('Scan a number first.', 400);
-      const unit = await scanUnitOntoChallan(ctx.scope, { challanItemId, serialNo });
+      const unit = await scanUnitOntoChallan(ctx.scope, { challanItemId, serialNo }, ctx.user.id);
       return { ok: true, challanItemId: unit.id };
     }
 

@@ -14,6 +14,7 @@ import { Modal } from '@/components/ui/Modal';
 import { Toolbar, ToolbarIcon } from '@/components/ui/Toolbar';
 import { formatCurrency, formatCurrencyCompact } from '@/lib/format';
 import type { BillForReturn } from '@/server/purchase-returns';
+import { DocSerials } from '@/components/stock/DocSerials';
 import {
   loadReceivedBills, loadBillDetail, createReturnAction,
   dispatchReturnAction, cancelReturnAction, issueDebitNoteAction, cancelDebitNoteAction,
@@ -40,11 +41,13 @@ const STATUS_TONE: Record<string, 'warning' | 'success' | 'danger' | 'neutral'> 
 };
 
 export function PurchaseReturnClient({
-  rows, canEdit, canIssueDebitNote,
+  rows, canEdit, canIssueDebitNote, canSerials = false,
 }: {
   rows: ReturnRowVM[];
   canEdit: boolean;
   canIssueDebitNote: boolean;
+  /** Stock: Edit - name or change the serials that went to the supplier. */
+  canSerials?: boolean;
 }) {
   const [filter, setFilter] = useState<string | null>(null);
   // Kept in the address (F1b): survives refresh and Back.
@@ -173,6 +176,7 @@ export function PurchaseReturnClient({
           row={reviewing}
           canEdit={canEdit}
           canIssueDebitNote={canIssueDebitNote}
+          canSerials={canSerials}
           onClose={() => setReviewing(null)}
           onChanged={() => window.location.reload()}
         />
@@ -311,11 +315,13 @@ function CreateReturnDialog({ onClose, onDone }: { onClose: () => void; onDone: 
 }
 
 function ManageDialog({
-  row, canEdit, canIssueDebitNote, onClose, onChanged,
+  row, canEdit, canIssueDebitNote, canSerials = false, onClose, onChanged,
 }: {
   row: ReturnRowVM;
   canEdit: boolean;
   canIssueDebitNote: boolean;
+  /** Stock: Edit - name or change the serials that went to the supplier. */
+  canSerials?: boolean;
   onClose: () => void;
   onChanged: () => void;
 }) {
@@ -378,6 +384,9 @@ function ManageDialog({
           <div className="flex justify-between"><dt>Reason</dt><dd className="font-medium text-foreground">{row.reason}</dd></div>
           <div className="flex justify-between"><dt>Debit note</dt><dd className="font-medium text-foreground">{issuedNote?.debitNoteNo ?? 'Not issued'}</dd></div>
         </dl>
+
+        {/* Which serials went to the supplier - their warranty claim is answered by these (29 Oct 2026). */}
+        <DocSerials kind="purchase_return" id={row.id} canEdit={canSerials} />
 
         {(row.lifecycle !== 'cancelled') && (
           <label className="grid gap-1 text-xs font-medium text-muted-foreground">

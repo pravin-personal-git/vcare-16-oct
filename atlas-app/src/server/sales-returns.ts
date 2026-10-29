@@ -6,6 +6,7 @@ import { allocateDocumentNumber } from './allocate-document-number';
 import { applyMovements } from './stock';
 import { computeTotals } from '@/lib/quotation-totals';
 import { postCogsMovement, reverseCogsMovement } from './cogs';
+import { unitsOnRef } from './serial-links';
 import {
   movesStock, returnableQty, validateReturn,
   type Disposition, type InvoiceLineForReturn, type ProposedReturnLine,
@@ -474,7 +475,7 @@ export async function createReturn(
     });
 
     if (receiving) {
-      await moveStockForReturn(tx, storeId, userId, sr.id, returnNo, sr.items, input.warehouseId ?? null);
+      await moveStockForReturn(tx, storeId, userId, sr, sr.items, input.warehouseId ?? null);
     }
 
     return sr;
@@ -521,7 +522,7 @@ export async function receiveReturn(
       throw new ReturnError('This return was received by somebody else a moment ago.');
     }
 
-    await moveStockForReturn(tx, storeId, userId, sr.id, sr.returnNo, sr.items, sr.warehouseId);
+    await moveStockForReturn(tx, storeId, userId, sr, sr.items, sr.warehouseId);
   });
 
   // Posted AFTER the transaction, same reasoning as `issueCreditNote`: the
@@ -564,8 +565,7 @@ async function moveStockForReturn(
   tx: Prisma.TransactionClient,
   storeId: string,
   userId: string,
-  returnId: string,
-  returnNo: string,
+  sr: { id: string; returnNo: string; invoiceId: string; partyId: string | null },
   items: { productId: string | null; qty: number; disposition: string; productName: string }[],
   warehouseId: string | null,
 ): Promise<void> {
@@ -576,9 +576,12 @@ async function moveStockForReturn(
       qty: i.qty,                       // positive - stock coming back in
       reason: 'return_in' as const,
       refType: 'SalesReturn',
-      refId: returnId,
-      refNo: returnNo,
+      refId: sr.id,
+      refNo: sr.returnNo,
       warehouseId,
+      // This customer's units off this invoice - never somebody else's (29 Oct 2026).
+      returnFromInvoiceId: sr.invoiceId,
+      partyId: sr.partyId,
     }));
 
   if (movements.length > 0) {
@@ -647,18 +650,27 @@ export async function cancelReturn(
 
     // Only reverse what was actually put in. A draft never moved stock.
     if (sr.lifecycle === 'received') {
+      // The exact units this return shelved go back to the customer and the bill;
+      // with none named nothing is guessed (29 Oct 2026).
+      const shelved = await unitsOnRef(tx, [storeId], { refType: 'SalesReturn', refId: sr.id }, ['in_stock', 'reserved']);
       const movements = sr.items
         .filter((i) => i.productId && movesStock(i.disposition as Disposition))
-        .map((i) => ({
-          productId: i.productId!,
-          qty: -i.qty,
-          reason: 'return_out' as const,
-          refType: 'SalesReturn',
-          refId: sr.id,
-          refNo: sr.returnNo,
-          note: `Return cancelled - ${reason.trim()}`,
-          warehouseId: sr.warehouseId,
-        }));
+        .map((i) => {
+          const ids = (shelved.get(i.productId!) ?? []).map((u) => u.id);
+          return {
+            productId: i.productId!,
+            qty: -i.qty,
+            reason: 'return_out' as const,
+            refType: 'SalesReturn',
+            refId: sr.id,
+            refNo: sr.returnNo,
+            note: `Return cancelled - ${reason.trim()}`,
+            warehouseId: sr.warehouseId,
+            ...(ids.length
+              ? { unitDestination: 'customer' as const, stockUnitIds: ids, partyId: sr.partyId, invoiceId: sr.invoiceId }
+              : { unitDestination: 'none' as const }),
+          };
+        });
       if (movements.length > 0) await applyMovements(tx, storeId, userId, movements);
     }
   });

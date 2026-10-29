@@ -3,6 +3,7 @@ import { db } from './db';
 import { scopeWhere, scopeForWrite, type StoreScope } from './store-scope';
 import { allocateDocumentNumber } from './allocate-document-number';
 import { applyMovements } from './stock';
+import { shelveUnit, unitsOnRef } from './serial-links';
 import { postJournalEntry, reverseJournalEntry } from './ledger';
 import type { LedgerLineInput } from '@/lib/ledger';
 import { LIST_MAX_ROWS } from '@/lib/list-limits';
@@ -338,6 +339,11 @@ export async function cancelPurchaseReturn(
           refId: pr.id,
           refNo: `${pr.returnNo} (cancelled)`,
         })));
+      }
+      // The units that went to the supplier on it are back on the shelf (29 Oct 2026).
+      const ref = { refType: 'PurchaseReturn', refId: pr.id, refNo: pr.returnNo };
+      for (const units of (await unitsOnRef(tx, [storeId], ref, ['with_supplier'])).values()) {
+        for (const u of units) await shelveUnit(tx, storeId, userId, { unitId: u.id, ref, invoiceId: null, from: ['with_supplier'], note: `${pr.returnNo} cancelled: ${reason.trim()}` });
       }
     }
   });

@@ -1,3 +1,4 @@
+import { DocSerials } from '@/components/stock/DocSerials';
 import { notFound } from 'next/navigation';
 import { requireContext } from '@/server/context';
 import { whatsappPanel } from '@/server/document-send';
@@ -38,6 +39,7 @@ export default async function SalesOrderPage({ params }: { params: Promise<{ id:
       <WhatsAppBusinessSend type="order" id={id} {...wa} />
       <InstallationStrip scope={ctx.scope} orderId={id} />
       <SalesOrderDocument id={id} initial={{ order, files }} />
+      <DocSerials kind="order" id={id} canEdit={ctx.scope.kind === 'single' && ctx.permissions.has('stock.adjust')} />
       <DocumentActivity table="SalesOrder" rowId={id} />
     </>
   );

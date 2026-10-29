@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/Button';
 import { Modal } from '@/components/ui/Modal';
 import { Field } from '@/components/ui/Layout';
 import {
-  cancelJobIssueAction, correctJobIssueAction, issueJobChallanAction, receiveReturnedPartsAction, serialChoicesAction,
+  cancelJobIssueAction, correctJobIssueAction, issueJobChallanAction, nameIssuedUnitAction, receiveReturnedPartsAction, serialChoicesAction,
   swapIssuedUnitAction, unitsOnShelfAction,
 } from '@/app/(app)/services/actions';
 import { installReceiveReturnAction } from '@/app/(app)/services/installations/actions';
@@ -19,10 +19,15 @@ export interface GdnFixLine {
 
 /** Tick exactly `need` serial numbers. */
 function SerialChecks({ units, need, value, onChange }: { units: { id: string; serialNo: string }[]; need: number; value: string[]; onChange: (v: string[]) => void }) {
+  const [q, setQ] = useState('');
+  // A long shelf gets a search box - the one printed on the box is typed, not scrolled for (29 Oct 2026).
+  const shown = q.trim() ? units.filter((u) => value.includes(u.id) || u.serialNo.toLowerCase().includes(q.trim().toLowerCase())) : units;
   return (
-    <div className="grid max-h-48 gap-1 overflow-y-auto rounded border border-border p-2">
+    <div className="grid max-h-56 gap-1 overflow-y-auto rounded border border-border p-2">
+      {units.length > 8 && <input aria-label="Search serial number" placeholder="Search serial…" value={q} onChange={(e) => setQ(e.target.value)} className="field-input mb-1 font-mono text-xs" />}
       {units.length === 0 && <p className="text-xs text-danger">No serial numbers available.</p>}
-      {units.map((u) => {
+      {units.length > 0 && shown.length === 0 && <p className="text-xs text-muted-foreground">No serial matches “{q}”.</p>}
+      {shown.map((u) => {
         const on = value.includes(u.id);
         return (
           <label key={u.id} className="flex items-center gap-2 font-mono text-xs">
@@ -49,6 +54,9 @@ export function GdnFix({ challanId, gdnNo, lines }: { challanId: string; gdnNo: 
   const [mode, setMode] = useState<null | 'correct' | 'cancel'>(null);
   const [qty, setQty] = useState<Record<string, number>>({});
   const [back, setBack] = useState<Record<string, string[]>>({});
+  /** Serial lines: how many of the parts with no serial were really handed over. */
+  const [keptBlind, setKeptBlind] = useState<Record<string, number>>({});
+  const blind = (l: GdnFixLine) => Math.max(0, l.qtyIssued - l.qtyReturned - (l.units ?? []).length);
   const [reason, setReason] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [pending, start] = useTransition();
@@ -56,14 +64,15 @@ export function GdnFix({ challanId, gdnNo, lines }: { challanId: string; gdnNo: 
 
   const open = (m: 'correct' | 'cancel') => {
     setQty(Object.fromEntries(lines.map((l) => [l.id, l.qtyIssued])));
-    setBack({}); setReason(''); setError(null); setMode(m);
+    setBack({}); setKeptBlind({}); setReason(''); setError(null); setMode(m);
   };
   const save = () => start(async () => {
     setError(null);
     const changes = lines.flatMap((l) => {
       if (l.serial) {
         const ids = back[l.id] ?? [];
-        return ids.length ? [{ lineId: l.id, qty: l.qtyIssued - ids.length, unitIds: ids }] : [];
+        const off = ids.length + (blind(l) - (keptBlind[l.id] ?? blind(l)));
+        return off ? [{ lineId: l.id, qty: l.qtyIssued - off, unitIds: ids }] : [];
       }
       const q = qty[l.id] ?? l.qtyIssued;
       return q !== l.qtyIssued ? [{ lineId: l.id, qty: q }] : [];
@@ -93,7 +102,13 @@ export function GdnFix({ challanId, gdnNo, lines }: { challanId: string; gdnNo: 
                 {lines.map((l) => l.serial ? (
                   <div key={l.id} className="grid gap-1 text-sm">
                     <span>{l.productName} <span className="text-muted-foreground">- tick the units NOT handed over</span></span>
-                    <SerialChecks units={l.units ?? []} need={Math.max(0, l.qtyIssued - l.qtyReturned - l.qtyReturnPending)} value={back[l.id] ?? []} onChange={(v) => setBack({ ...back, [l.id]: v })} />
+                    {(l.units ?? []).length > 0 && <SerialChecks units={l.units ?? []} need={Math.max(0, l.qtyIssued - l.qtyReturned - l.qtyReturnPending)} value={back[l.id] ?? []} onChange={(v) => setBack({ ...back, [l.id]: v })} />}
+                    {blind(l) > 0 && (
+                      <label className="flex items-center justify-between gap-3 text-xs">
+                        <span className="text-muted-foreground">Without a serial on the GDN - handed over (of {blind(l)})</span>
+                        <input type="number" min={0} max={blind(l)} value={keptBlind[l.id] ?? blind(l)} onChange={(e) => setKeptBlind({ ...keptBlind, [l.id]: Math.max(0, Math.min(blind(l), Number(e.target.value))) })} className="field-input w-20" />
+                      </label>
+                    )}
                   </div>
                 ) : (
                   <div key={l.id} className="flex items-center justify-between gap-3 text-sm">
@@ -162,12 +177,16 @@ export function IssueParts({ challanId, hasSerial, label = 'Issue (create GDN)',
 }
 
 /** The store receives parts coming back - for serial items, tick which units. */
-export function ReceiveBack({ lineId, qty, serial, units = [], onDone }: { lineId: string; qty: number; serial?: boolean; units?: { id: string; serialNo: string }[]; onDone?: (msg: string) => void }) {
+export function ReceiveBack({ lineId, qty, serial, units = [], unnamed = 0, onDone }: { lineId: string; qty: number; serial?: boolean; units?: { id: string; serialNo: string }[]; unnamed?: number; onDone?: (msg: string) => void }) {
   const router = useRouter();
   const [pending, start] = useTransition();
   const [open, setOpen] = useState(false);
   const [ids, setIds] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
+  // Parts that left with no serial come back by count (29 Oct 2026): at least
+  // `pick` named ones are ticked, and any named one that came back may be.
+  const pick = qty - Math.min(qty, unnamed);
+  const most = Math.min(qty, units.length);
   const go = (unitIds?: string[]) => start(async () => {
     setError(null);
     const r = await receiveReturnedPartsAction(lineId, unitIds);
@@ -176,13 +195,14 @@ export function ReceiveBack({ lineId, qty, serial, units = [], onDone }: { lineI
   });
   return (
     <>
-      <Button size="sm" loading={pending && !open} onClick={() => (serial ? (setIds([]), setOpen(true)) : go())}>Receive {qty} into stock</Button>
+      <Button size="sm" loading={pending && !open} onClick={() => (serial && most > 0 ? (setIds([]), setOpen(true)) : go(serial ? [] : undefined))}>Receive {qty} into stock</Button>
       {error && !open && <span role="alert" className="text-xs text-danger">{error}</span>}
       {open && (
         <Modal title="Which serial numbers came back?" icon="refresh" onClose={() => setOpen(false)}
-          footer={<><Button onClick={() => setOpen(false)}>Back</Button><Button variant="primary" loading={pending} disabled={ids.length !== qty} onClick={() => go(ids)}>Receive</Button></>}>
+          footer={<><Button onClick={() => setOpen(false)}>Back</Button><Button variant="primary" loading={pending} disabled={ids.length < pick || ids.length > most} onClick={() => go(ids)}>Receive</Button></>}>
           {error && <p role="alert" className="mb-2 text-sm text-danger">{error}</p>}
-          <SerialChecks units={units} need={qty} value={ids} onChange={setIds} />
+          {qty > pick && <p className="mb-2 text-xs text-muted-foreground">Tick the serials that came back; the rest of the {qty} come back by count - they left on the GDN without a serial.</p>}
+          <SerialChecks units={units} need={most} value={ids} onChange={setIds} />
         </Modal>
       )}
     </>
@@ -285,6 +305,45 @@ export function SwapSerial({ lineId, productId, productName, units, onDone }: {
             <div className="grid gap-1 text-sm"><span>The unit that really went</span><ShelfUnits productId={productId} need={1} value={to} onChange={setTo} /></div>
             <Field label="Why" htmlFor="sw-why"><input id="sw-why" value={reason} onChange={(e) => setReason(e.target.value)} className="field-input" /></Field>
             <p className="text-xs text-muted-foreground">The serial on the GDN goes back on the shelf; the one you pick goes to the customer. Stock count and cost do not change.</p>
+          </div>
+        </Modal>
+      )}
+    </>
+  );
+}
+
+/**
+ * Name the serial of a part that left on the GDN without one (29 Oct 2026) -
+ * counted by quantity then, or nobody picked. Stock does not move; the unit
+ * goes to the customer and the bill, and the GDN prints it.
+ */
+export function AddSerial({ lineId, productId, productName, missing, onDone }: {
+  lineId: string; productId: string; productName: string; missing: number; onDone?: (msg: string) => void;
+}) {
+  const router = useRouter();
+  const [open, setOpen] = useState(false);
+  const [pick, setPick] = useState<{ id: string; serialNo: string }[]>([]);
+  const [reason, setReason] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [pending, start] = useTransition();
+  if (missing <= 0) return null;
+  const save = () => start(async () => {
+    setError(null);
+    const r = await nameIssuedUnitAction(lineId, pick[0]?.id ?? '', reason);
+    if (r.error) { setError(r.error); return; }
+    setOpen(false); onDone?.(`Serial ${r.serialNo ?? ''} added.`); router.refresh();
+  });
+  return (
+    <>
+      <button type="button" className="text-xs font-medium text-brand hover:underline" onClick={() => { setPick([]); setReason(''); setError(null); setOpen(true); }}>Add serial</button>
+      {open && (
+        <Modal title={`Add serial - ${productName}`} icon="plus" onClose={() => setOpen(false)}
+          footer={<><Button onClick={() => setOpen(false)}>Back</Button><Button variant="primary" loading={pending} disabled={pick.length !== 1 || !reason.trim()} onClick={save}>Add serial</Button></>}>
+          <div className="grid gap-3">
+            {error && <p role="alert" className="text-sm text-danger">{error}</p>}
+            <div className="grid gap-1 text-sm"><span>The unit that went ({missing} without a serial)</span><ShelfUnits productId={productId} need={1} value={pick} onChange={setPick} /></div>
+            <Field label="Why it was not on the GDN" htmlFor="as-why"><input id="as-why" value={reason} onChange={(e) => setReason(e.target.value)} className="field-input" placeholder="Was counted by quantity then…" /></Field>
+            <p className="text-xs text-muted-foreground">It goes to the customer and onto the job&apos;s bill; the GDN, Product History and the warranty show it. Stock count and cost do not change.</p>
           </div>
         </Modal>
       )}

@@ -3,6 +3,7 @@ import { db } from './db';
 import { scopeWhere, type StoreScope } from './store-scope';
 import { FEED_MAX_ROWS, LIST_MAX_ROWS } from '@/lib/list-limits';
 import { daysUntil } from '@/lib/expiry-policy';
+import { docHref } from '@/lib/doc-href';
 
 /**
  * A product's whole life, at two levels (2 Oct 2026).
@@ -354,12 +355,7 @@ export async function productHistory(
         select: { id: true, fromStatus: true, toStatus: true, refType: true, refId: true, refNo: true, note: true, createdAt: true, unit: { select: { serialNo: true } } },
       }),
   ]);
-  const docLink = (refType: string | null, refId: string | null, refNo: string | null) => {
-    if (refType === 'MaterialIssue' && refNo) return `/goods-dispatch/complaint-gdns?gdn=${encodeURIComponent(refNo)}#gdn-${encodeURIComponent(refNo)}`;
-    if (refType === 'RmaReceipt' && refId) return `/services/dispatch/receipts/${refId}`;
-    if (refType === 'ReplacementCase' && refNo) return `/services/replacements?q=${encodeURIComponent(refNo)}`;
-    return null;
-  };
+  const docLink = docHref;
   const moves: MoveRow[] = [
     ...movements.map((m) => ({
       key: `m-${m.id}`, at: m.createdAt, title: (MOVE_TITLE[m.reason] ?? (() => m.reason))(m.qty), qty: m.qty,
