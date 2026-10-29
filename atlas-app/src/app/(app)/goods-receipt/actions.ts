@@ -3,7 +3,7 @@
 import { revalidatePath } from 'next/cache';
 import { requireContext } from '@/server/context';
 import { db } from '@/server/db';
-import { receiveGoods as receive, cancelGrn, getGrnDetail, linkGrnLine, type GrnLineDraft } from '@/server/goods-receipt';
+import { receiveGoods as receive, addGrnLines, cancelGrn, getGrnDetail, linkGrnLine, type GrnLineDraft } from '@/server/goods-receipt';
 import { friendlyError } from '@/lib/friendly-error';
 import { istDayStart } from '@/lib/date-ranges';
 
@@ -81,6 +81,31 @@ export async function receiveGoods(input: {
       id: created.id,
       message: [`${created.grnNo} posted. Stock is in.`, ...created.warnings].join(' '),
     };
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/** Add lines to a posted, unbilled receipt (29 Oct 2026). The lines already on it are not touched. */
+export async function addReceiptItems(grnId: string, lines: GrnLineForm[]): Promise<GrnState> {
+  const g = await guard();
+  if ('error' in g) return g;
+  try {
+    const r = await addGrnLines(g.ctx.scope, grnId, lines.map((l) => ({
+      ...l,
+      expiryDate: l.expiryDate ? istDayStart(l.expiryDate) ?? new Date(Number.NaN) : null,
+    })), g.ctx.user.id);
+    await db.activityLog.create({
+      data: {
+        storeId: g.ctx.scope.kind === 'single' ? g.ctx.scope.storeId : '',
+        userId: g.ctx.user.id, activityType: 'updated', entityType: 'GoodsReceiptNote',
+        entityId: grnId, description: `${r.grnNo}: ${r.added} line${r.added === 1 ? '' : 's'} added after posting`,
+      },
+    }).catch((e) => console.error('[goods-receipt] audit write failed (non-fatal)', e));
+    revalidatePath('/goods-receipt');
+    revalidatePath(`/goods-receipt/${grnId}`);
+    revalidatePath('/products');
+    return { ok: true, id: grnId, message: [`${r.added} line${r.added === 1 ? '' : 's'} added to ${r.grnNo}. Stock is in.`, ...r.warnings].join(' ') };
   } catch (e) {
     return fail(e);
   }

@@ -13,6 +13,11 @@ type Need = 'buyers' | 'catalogue' | 'leads' | 'parties' | 'stockProducts';
  */
 const cache = new Map<Need, unknown>();
 
+/** Drop cached lists after a change that makes them wrong - a product's tracking, say. */
+export function forgetFormOptions(...needs: Need[]) {
+  for (const n of needs) cache.delete(n);
+}
+
 export function WithFormOptions({ need, children, onClose }: {
   need: Need[];
   children: (o: Required<FormOptions>) => ReactNode;

@@ -11,6 +11,7 @@ import { documentTrail } from '@/server/document-trail';
 import { DocumentTrail } from '@/components/document/DocumentTrail';
 import { DocumentActivity } from '@/components/document/DocumentActivity';
 import { LinkLine } from './LinkLine';
+import { AddItems } from './AddItems';
 
 /**
  * ONE GOODS RECEIPT (G-29, 10 Oct 2026). What came in from a supplier, the
@@ -27,6 +28,9 @@ export default async function GoodsReceiptPage({ params }: { params: Promise<{ i
   if (!g) notFound();
   const trail = await documentTrail(ctx.scope, 'goods_receipt', g.id);
   const link = 'font-mono text-brand hover:underline';
+  const canEdit = ctx.scope.kind === 'single' && ctx.permissions.has('purchase.edit');
+  // Same rule as addGrnLines: posted, and no bill has taken its lines yet.
+  const canAdd = canEdit && g.status === 'posted' && !g.sourceBillId && !g.billedOnId && !g.bill;
   const tone = g.status === 'cancelled' ? 'danger' : g.status === 'draft' ? 'warning' : 'success';
 
   return (
@@ -47,7 +51,8 @@ export default async function GoodsReceiptPage({ params }: { params: Promise<{ i
       <DocumentTrail steps={trail} />
 
       <div className="grid gap-4 lg:grid-cols-3">
-        <SectionCard title="What came in" icon="package" className="lg:col-span-2" bodyClassName="p-0">
+        <SectionCard title="What came in" icon="package" className="lg:col-span-2" bodyClassName="p-0"
+          action={canAdd ? <AddItems grnId={g.id} grnNo={g.grnNo} partyId={g.partyId} /> : undefined}>
           <div className="overflow-x-auto">
             <table className="w-full min-w-[36rem] text-sm">
               <thead>
@@ -65,7 +70,7 @@ export default async function GoodsReceiptPage({ params }: { params: Promise<{ i
                       <ProductLink id={i.productId} className="block font-medium">{i.productName}</ProductLink>
                       {i.productCode && <span className="block font-mono text-xs text-muted-foreground">{i.productCode}</span>}
                       {!i.productId && g.status === 'posted' && (
-                        <LinkLine grnItemId={i.id} canEdit={ctx.scope.kind === 'single' && ctx.permissions.has('purchase.edit')} />
+                        <LinkLine grnItemId={i.id} canEdit={canEdit} />
                       )}
                     </td>
                     <td className="px-3 py-2 text-right tabular-nums">{i.qty}</td>

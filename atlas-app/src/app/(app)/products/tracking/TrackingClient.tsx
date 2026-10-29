@@ -14,6 +14,7 @@ import {
 } from '@/lib/stock-tracking';
 import type { TrackingRow } from '@/server/stock-tracking';
 import { applyTrackingAction } from './actions';
+import { forgetFormOptions } from '@/components/document/WithFormOptions';
 
 type Filter = 'service' | TrackingMode;
 
@@ -82,6 +83,8 @@ export function TrackingClient({
       ],
     });
     clear();
+    // Open forms re-read products, so a receipt shows the serial box at once.
+    forgetFormOptions('stockProducts', 'catalogue');
     router.refresh();
   }
 

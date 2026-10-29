@@ -87,6 +87,27 @@ function validateLines(lines: GrnLineDraft[]) {
   if (lines.some((l) => l.qty <= 0)) throw new GrnError('Quantity must be more than zero on every line.');
 }
 
+/** One receipt line as stored. */
+function lineRow(storeId: string, grnId: string, l: GrnLineDraft, srNo: number) {
+  return {
+    storeId,
+    grnId,
+    purchaseOrderItemId: l.purchaseOrderItemId ?? null,
+    srNo,
+    productId: l.productId ?? null,
+    productName: l.productName.trim(),
+    productCode: l.productCode ?? null,
+    qty: l.qty,
+    unitCostPaise: l.unitCostPaise,
+    taxRatePct: l.taxRatePct ?? null,
+    warrantyMonths: l.warrantyMonths ?? null,
+    isRefurbished: l.isRefurbished ?? false,
+    lotNo: l.lotNo?.trim() || null,
+    mfgDate: l.mfgDate ?? null,
+    expiryDate: l.expiryDate ?? null,
+  };
+}
+
 export async function createGrn(
   scope: StoreScope,
   input: CreateGrnInput,
@@ -130,23 +151,7 @@ export async function createGrn(
     });
 
     await tx.goodsReceiptNoteItem.createMany({
-      data: input.lines.map((l, i) => ({
-        storeId,
-        grnId: created.id,
-        purchaseOrderItemId: l.purchaseOrderItemId ?? null,
-        srNo: i + 1,
-        productId: l.productId ?? null,
-        productName: l.productName.trim(),
-        productCode: l.productCode ?? null,
-        qty: l.qty,
-        unitCostPaise: l.unitCostPaise,
-        taxRatePct: l.taxRatePct ?? null,
-        warrantyMonths: l.warrantyMonths ?? null,
-        isRefurbished: l.isRefurbished ?? false,
-        lotNo: l.lotNo?.trim() || null,
-        mfgDate: l.mfgDate ?? null,
-        expiryDate: l.expiryDate ?? null,
-      })),
+      data: input.lines.map((l, i) => lineRow(storeId, created.id, l, i + 1)),
     });
 
     if (!party.isSupplier) {
@@ -256,6 +261,21 @@ export async function postGrn(
   if (grn.status === 'cancelled') throw new GrnError(`${grn.grnNo} was cancelled and cannot be posted.`);
 
   const stockItems = grn.items.filter((i) => i.productId);
+  const loaded = await loadForPosting(scope, storeId, stockItems);
+
+  await db.$transaction(async (tx) => {
+    await stockInLines(tx, storeId, userId, grn, grn.items, loaded, lineUnits);
+    await tx.goodsReceiptNote.update({ where: { id: grn.id }, data: { status: 'posted' } });
+  });
+}
+
+type PostingProduct = { id: string; productCode: string; trackingMode: string; tracksExpiry: boolean; shelfLifeDays: number | null };
+type PostingLoad = { products: Map<string, PostingProduct>; existingByProduct: Map<string, (string | null)[]> };
+type PostingGrn = { id: string; grnNo: string; partyId: string; receivedDate: Date; sourceBillId: string | null; purchaseOrderId: string | null };
+type PostingItem = Prisma.GoodsReceiptNoteItemGetPayload<object>;
+
+/** The products and existing serials posting needs - read before the transaction. */
+async function loadForPosting(scope: StoreScope, storeId: string, stockItems: { productId: string | null }[]): Promise<PostingLoad> {
   const products = new Map(
     (await db.product.findMany({
       where: { id: { in: stockItems.map((i) => i.productId!) }, ...scopeWhere(scope) },
@@ -289,180 +309,185 @@ export async function postGrn(
       existingByProduct.set(r.productId, list);
     }
   }
+  return { products, existingByProduct };
+}
 
-  await db.$transaction(async (tx) => {
-    for (const item of stockItems) {
-      const product = products.get(item.productId!);
-      const mode = product?.trackingMode ?? 'quantity';
-      let lotId: string | null = null;
+/**
+ * Put these receipt lines on the shelf: stock, lots, units, cost history and
+ * the PO's received qty. Shared by posting a receipt and by adding lines to a
+ * posted one (29 Oct 2026), so a line added later is stocked exactly as if it
+ * had been there at posting.
+ */
+async function stockInLines(
+  tx: Prisma.TransactionClient,
+  storeId: string,
+  userId: string,
+  grn: PostingGrn,
+  items: PostingItem[],
+  { products, existingByProduct }: PostingLoad,
+  lineUnits: LineUnits,
+): Promise<void> {
+  const stockItems = items.filter((i) => i.productId);
+  for (const item of stockItems) {
+    const product = products.get(item.productId!);
+    const mode = product?.trackingMode ?? 'quantity';
+    let lotId: string | null = null;
 
-      /**
-       * The expiry date for this delivery.
-       *
-       * What the clerk typed wins, always - the pack is in their hand. Only
-       * where they typed nothing does the product's shelf life fill it in, and
-       * only for a product somebody marked as expiring. A product with no shelf
-       * life on file and no typed date stays null, because a guessed expiry is
-       * worse than none: a reminder fires on it and good stock is thrown away.
-       */
-      const expiryDate = item.expiryDate
-        ?? (product?.tracksExpiry
-          ? deriveExpiry(grn.receivedDate, product.shelfLifeDays)
-          : null);
-      if (expiryDate && !item.expiryDate) {
-        await tx.goodsReceiptNoteItem.update({
-          where: { id: item.id },
-          data: { expiryDate },
-        });
-      }
-
-      if (mode === 'batch') {
-        const lotNo = item.lotNo?.trim() || grn.grnNo;
-        const existing = await tx.stockLot.findFirst({
-          where: { storeId, productId: item.productId!, lotNo },
-          select: { id: true },
-        });
-        lotId = existing?.id ?? (await tx.stockLot.create({
-          data: {
-            storeId,
-            productId: item.productId!,
-            lotNo,
-            grnItemId: item.id,
-            unitCostPaise: item.unitCostPaise,
-            mfgDate: item.mfgDate,
-            expiryDate,
-            receivedAt: grn.receivedDate,
-            createdBy: userId,
-          },
-          select: { id: true },
-        })).id;
-      }
-
-      await applyMovements(tx, storeId, userId, [{
-        productId: item.productId!,
-        qty: item.qty,
-        reason: 'receipt',
-        refType: 'GoodsReceiptNote',
-        refId: grn.id,
-        refNo: grn.grnNo,
-        lotId,
-      }]);
-
-      if (mode === 'serial') {
-        const typed = lineUnits.get(item.srNo) ?? [];
-        if (typed.length > item.qty) {
-          throw new GrnError(`${item.productName}: ${typed.length} units for ${item.qty} received.`);
-        }
-
-        // RULE 1: one unit per item received. Blank slots get a house tag.
-        const identities = completeLineSerials({
-          productCode: product?.productCode ?? item.productCode ?? 'ITEM',
-          qty: item.qty,
-          typed,
-          at: grn.receivedDate,
-          existingSerials: existingByProduct.get(item.productId!) ?? [],
-        });
-
-        // Keep the in-memory list current so a second line of the SAME product
-        // on this receipt does not re-issue the tags the first line just took.
-        const seen = existingByProduct.get(item.productId!) ?? [];
-        existingByProduct.set(item.productId!, [...seen, ...identities.map((i) => i.serialNo)]);
-
-        const created = await tx.stockUnit.createManyAndReturn({
-          data: identities.map((i) => ({
-            storeId,
-            productId: item.productId!,
-            serialNo: i.serialNo,
-            identitySource: i.identitySource,
-            status: 'in_stock',
-            condition: item.isRefurbished ? 'refurbished' : 'new',
-            grnItemId: item.id,
-            unitCostPaise: item.unitCostPaise,
-            receivedAt: grn.receivedDate,
-            createdBy: userId,
-          })),
-          select: { id: true, serialNo: true, identitySource: true },
-        });
-        await tx.stockUnitEvent.createMany({
-          data: created.map((u) => ({
-            storeId,
-            unitId: u.id,
-            eventType: 'received',
-            toStatus: 'in_stock',
-            toCondition: item.isRefurbished ? 'refurbished' : 'new',
-            partyId: grn.partyId,
-            refType: 'GoodsReceiptNote',
-            refId: grn.id,
-            refNo: grn.grnNo,
-            // Said in the unit's own history, so a year later nobody has to
-            // guess whether that number came off the box or out of Atlas.
-            note: u.identitySource === 'house'
-              ? 'No serial on the item - Atlas issued this number. Print the label and stick it on.'
-              : null,
-            createdBy: userId,
-          })),
-        });
-      }
+    /**
+     * The expiry date for this delivery.
+     *
+     * What the clerk typed wins, always - the pack is in their hand. Only
+     * where they typed nothing does the product's shelf life fill it in, and
+     * only for a product somebody marked as expiring. A product with no shelf
+     * life on file and no typed date stays null, because a guessed expiry is
+     * worse than none: a reminder fires on it and good stock is thrown away.
+     */
+    const expiryDate = item.expiryDate
+      ?? (product?.tracksExpiry
+        ? deriveExpiry(grn.receivedDate, product.shelfLifeDays)
+        : null);
+    if (expiryDate && !item.expiryDate) {
+      await tx.goodsReceiptNoteItem.update({
+        where: { id: item.id },
+        data: { expiryDate },
+      });
     }
 
-    if (!grn.sourceBillId && stockItems.length > 0) {
-      await tx.productPurchasePrice.createMany({
-        data: stockItems.map((i) => ({
+    if (mode === 'batch') {
+      const lotNo = item.lotNo?.trim() || grn.grnNo;
+      const existing = await tx.stockLot.findFirst({
+        where: { storeId, productId: item.productId!, lotNo },
+        select: { id: true },
+      });
+      lotId = existing?.id ?? (await tx.stockLot.create({
+        data: {
           storeId,
-          productId: i.productId!,
-          unitCostPaise: i.unitCostPaise,
-          qty: i.qty,
-          purchasedAt: grn.receivedDate,
-          supplierId: grn.partyId,
-          reference: grn.grnNo,
-          source: 'grn',
+          productId: item.productId!,
+          lotNo,
+          grnItemId: item.id,
+          unitCostPaise: item.unitCostPaise,
+          mfgDate: item.mfgDate,
+          expiryDate,
+          receivedAt: grn.receivedDate,
+          createdBy: userId,
+        },
+        select: { id: true },
+      })).id;
+    }
+
+    await applyMovements(tx, storeId, userId, [{
+      productId: item.productId!,
+      qty: item.qty,
+      reason: 'receipt',
+      refType: 'GoodsReceiptNote',
+      refId: grn.id,
+      refNo: grn.grnNo,
+      lotId,
+    }]);
+
+    if (mode === 'serial') {
+      const typed = lineUnits.get(item.srNo) ?? [];
+      if (typed.length > item.qty) {
+        throw new GrnError(`${item.productName}: ${typed.length} units for ${item.qty} received.`);
+      }
+
+      // RULE 1: one unit per item received. Blank slots get a house tag.
+      const identities = completeLineSerials({
+        productCode: product?.productCode ?? item.productCode ?? 'ITEM',
+        qty: item.qty,
+        typed,
+        at: grn.receivedDate,
+        existingSerials: existingByProduct.get(item.productId!) ?? [],
+      });
+
+      // Keep the in-memory list current so a second line of the SAME product
+      // on this receipt does not re-issue the tags the first line just took.
+      const seen = existingByProduct.get(item.productId!) ?? [];
+      existingByProduct.set(item.productId!, [...seen, ...identities.map((i) => i.serialNo)]);
+
+      const created = await tx.stockUnit.createManyAndReturn({
+        data: identities.map((i) => ({
+          storeId,
+          productId: item.productId!,
+          serialNo: i.serialNo,
+          identitySource: i.identitySource,
+          status: 'in_stock',
+          condition: item.isRefurbished ? 'refurbished' : 'new',
+          grnItemId: item.id,
+          unitCostPaise: item.unitCostPaise,
+          receivedAt: grn.receivedDate,
+          createdBy: userId,
+        })),
+        select: { id: true, serialNo: true, identitySource: true },
+      });
+      await tx.stockUnitEvent.createMany({
+        data: created.map((u) => ({
+          storeId,
+          unitId: u.id,
+          eventType: 'received',
+          toStatus: 'in_stock',
+          toCondition: item.isRefurbished ? 'refurbished' : 'new',
+          partyId: grn.partyId,
+          refType: 'GoodsReceiptNote',
+          refId: grn.id,
+          refNo: grn.grnNo,
+          // Said in the unit's own history, so a year later nobody has to
+          // guess whether that number came off the box or out of Atlas.
+          note: u.identitySource === 'house'
+            ? 'No serial on the item - Atlas issued this number. Print the label and stick it on.'
+            : null,
           createdBy: userId,
         })),
       });
     }
+  }
 
-    if (grn.purchaseOrderId) {
-      for (const item of grn.items) {
-        if (!item.purchaseOrderItemId) continue;
-        await tx.purchaseOrderItem.update({
-          where: { id: item.purchaseOrderItemId },
-          data: { receivedQty: { increment: item.qty } },
-        });
-      }
-      await syncPurchaseOrderStatus(tx, grn.purchaseOrderId);
+  if (!grn.sourceBillId && stockItems.length > 0) {
+    await tx.productPurchasePrice.createMany({
+      data: stockItems.map((i) => ({
+        storeId,
+        productId: i.productId!,
+        unitCostPaise: i.unitCostPaise,
+        qty: i.qty,
+        purchasedAt: grn.receivedDate,
+        supplierId: grn.partyId,
+        reference: grn.grnNo,
+        source: 'grn',
+        createdBy: userId,
+      })),
+    });
+  }
+
+  if (grn.purchaseOrderId) {
+    for (const item of items) {
+      if (!item.purchaseOrderItemId) continue;
+      await tx.purchaseOrderItem.update({
+        where: { id: item.purchaseOrderItemId },
+        data: { receivedQty: { increment: item.qty } },
+      });
     }
-
-    await tx.goodsReceiptNote.update({ where: { id: grn.id }, data: { status: 'posted' } });
-  });
+    await syncPurchaseOrderStatus(tx, grn.purchaseOrderId);
+  }
 }
 
 /**
- * Receive goods in one step - plan every line, refuse anything wrong before a
- * number is used, then create and post.
- *
- * This is the path a person takes at the door. Serials are checked twice
- * before anything is written: against each other (lib/stock-intake) and
- * against units already in the store, case-insensitively, because a scanner
- * and a person typing the same label disagree on case and it is still one
- * camera.
- *
- * If posting fails after the draft is created - a serial taken by a
- * simultaneous receipt, say - the draft is cancelled with the reason rather
- * than left lying about looking like a receipt that is waiting for somebody.
+ * Check every line and its serials before anything is written - against the
+ * product's tracking, each other, and units already on file. `lineUnits` is
+ * keyed by line position from 1; a caller adding lines after existing ones
+ * shifts the keys to the real `srNo`.
  */
-export async function receiveGoods(
+async function planLines(
   scope: StoreScope,
-  input: CreateGrnInput,
-  userId: string,
-): Promise<{ id: string; grnNo: string; warnings: string[] }> {
-  const storeId = scopeForWrite(scope);
-  validateLines(input.lines);
+  storeId: string,
+  drafts: GrnLineDraft[],
+): Promise<{ lines: GrnLineDraft[]; lineUnits: LineUnits; warnings: string[] }> {
+  validateLines(drafts);
   // G1 (12 Oct 2026): a line with no product would post and add no stock,
   // silently. Refused here, so the website and the phone both stop at it.
-  const unlinked = unlinkedLinesError(input.lines);
+  const unlinked = unlinkedLinesError(drafts);
   if (unlinked) throw new GrnError(unlinked);
 
-  const ids = [...new Set(input.lines.map((l) => l.productId).filter((x): x is string => !!x))];
+  const ids = [...new Set(drafts.map((l) => l.productId).filter((x): x is string => !!x))];
   const products = new Map(
     (await db.product.findMany({
       where: { id: { in: ids }, ...scopeWhere(scope) },
@@ -472,7 +497,7 @@ export async function receiveGoods(
 
   const lineUnits: LineUnits = new Map();
   const warnings: string[] = [];
-  const lines = input.lines.map((l) => ({ ...l }));
+  const lines = drafts.map((l) => ({ ...l }));
 
   lines.forEach((l, i) => {
     if (!l.productId) return;
@@ -512,6 +537,30 @@ export async function receiveGoods(
       + `${taken.length > 5 ? ` and ${taken.length - 5} more` : ''}. A serial can only arrive once.`,
     );
   }
+  return { lines, lineUnits, warnings };
+}
+
+/**
+ * Receive goods in one step - plan every line, refuse anything wrong before a
+ * number is used, then create and post.
+ *
+ * This is the path a person takes at the door. Serials are checked twice
+ * before anything is written: against each other (lib/stock-intake) and
+ * against units already in the store, case-insensitively, because a scanner
+ * and a person typing the same label disagree on case and it is still one
+ * camera.
+ *
+ * If posting fails after the draft is created - a serial taken by a
+ * simultaneous receipt, say - the draft is cancelled with the reason rather
+ * than left lying about looking like a receipt that is waiting for somebody.
+ */
+export async function receiveGoods(
+  scope: StoreScope,
+  input: CreateGrnInput,
+  userId: string,
+): Promise<{ id: string; grnNo: string; warnings: string[] }> {
+  const storeId = scopeForWrite(scope);
+  const { lines, lineUnits, warnings } = await planLines(scope, storeId, input.lines);
 
   const created = await createGrn(scope, { ...input, lines }, userId);
   try {
@@ -522,6 +571,60 @@ export async function receiveGoods(
     throw err;
   }
   return { ...created, warnings };
+}
+
+/**
+ * Add lines to a receipt that is already posted (29 Oct 2026) - the goods
+ * that turned up with it but could not be logged at the time, e.g. a product
+ * whose tracking had to be switched to serial first.
+ *
+ * Adding only: the lines already on it are never touched, so nothing that
+ * relies on them - units sold since, warranty dates, cost history - can move.
+ * The new lines are checked exactly as at the door and stocked by the same
+ * `stockInLines`. Refused once the receipt is billed, because the bill copied
+ * its lines and a line added after would be stock nobody paid for.
+ */
+export async function addGrnLines(
+  scope: StoreScope,
+  grnId: string,
+  drafts: GrnLineDraft[],
+  userId: string,
+): Promise<{ grnNo: string; added: number; warnings: string[] }> {
+  const storeId = scopeForWrite(scope);
+  const grn = await db.goodsReceiptNote.findFirst({
+    where: { id: grnId, ...scopeWhere(scope) },
+    select: {
+      id: true, grnNo: true, status: true, partyId: true, receivedDate: true,
+      sourceBillId: true, billedOnId: true, purchaseOrderId: true, supplierInvoiceNo: true,
+      items: { select: { srNo: true } },
+    },
+  });
+  if (!grn) throw new GrnError('Goods receipt not found in your scope.');
+  if (grn.status !== 'posted') throw new GrnError(`${grn.grnNo} is ${grn.status}; items can only be added to a posted receipt.`);
+  if (grn.sourceBillId) throw new GrnError(`${grn.grnNo} was made by its bill. Add the items to a new receipt.`);
+  if (grn.billedOnId) throw new GrnError(`${grn.grnNo} is already billed. Add the items to a new receipt.`);
+  // The detail page shows a bill matched by the supplier's invoice number too; respect it.
+  if (grn.supplierInvoiceNo && await db.purchaseBill.findFirst({
+    where: { ...scopeWhere(scope), partyId: grn.partyId, supplierBillNo: grn.supplierInvoiceNo }, select: { id: true },
+  })) throw new GrnError(`${grn.grnNo} has a bill for invoice ${grn.supplierInvoiceNo}. Add the items to a new receipt.`);
+
+  // Added lines stand alone - never against a PO line.
+  const { lines, lineUnits: planned, warnings } = await planLines(scope, storeId, drafts.map((l) => ({ ...l, purchaseOrderItemId: null })));
+  const base = grn.items.reduce((m, i) => Math.max(m, i.srNo), 0);
+  const lineUnits: LineUnits = new Map([...planned].map(([k, v]) => [k + base, v]));
+  // Read before the transaction - the pooler runs one connection.
+  const loaded = await loadForPosting(scope, storeId, lines.map((l) => ({ productId: l.productId ?? null })));
+
+  await db.$transaction(async (tx) => {
+    // Billed or cancelled since the read above? Stop rather than add to it.
+    const still = await tx.goodsReceiptNote.count({ where: { id: grn.id, status: 'posted', billedOnId: null, sourceBillId: null } });
+    if (!still) throw new GrnError(`${grn.grnNo} changed while you were adding. Open it again.`);
+    const items = await tx.goodsReceiptNoteItem.createManyAndReturn({
+      data: lines.map((l, i) => lineRow(storeId, grn.id, l, base + i + 1)),
+    });
+    await stockInLines(tx, storeId, userId, grn, items, loaded, lineUnits);
+  });
+  return { grnNo: grn.grnNo, added: lines.length, warnings };
 }
 
 /**

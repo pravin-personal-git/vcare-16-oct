@@ -323,9 +323,11 @@ export function GoodsReceiptClient({
   );
 }
 
-function ReceiveGoodsModal({
-  orders, suppliers, products: baseProducts, initialScan, initialReceive, onClose, onSubmit,
+export function ReceiveGoodsModal({
+  orders, suppliers, products: baseProducts, initialScan, initialReceive, addTo, onClose, onSubmit,
 }: {
+  /** Adding lines to a posted receipt (29 Oct 2026): only the items part of the form shows. */
+  addTo?: { grnNo: string; partyId: string };
   orders: OrderVM[];
   suppliers: SupplierVM[];
   products: ProductVM[];
@@ -341,7 +343,7 @@ function ReceiveGoodsModal({
   const today = new Date().toISOString().slice(0, 10);
 
   const [orderId, setOrderId] = useState('');
-  const [partyId, setPartyId] = useState('');
+  const [partyId, setPartyId] = useState(addTo?.partyId ?? '');
   const [receivedDate, setReceivedDate] = useState(today);
   const [supplierInvoiceNo, setSupplierInvoiceNo] = useState('');
   const [notes, setNotes] = useState('');
@@ -649,8 +651,8 @@ function ReceiveGoodsModal({
 
   return (
     <Modal
-      title="Receive goods"
-      subtitle="What arrived, how much, and - for tracked products - which ones"
+      title={addTo ? `Add items to ${addTo.grnNo}` : 'Receive goods'}
+      subtitle={addTo ? 'Goods that came with this receipt. The lines already on it stay as they are.' : 'What arrived, how much, and - for tracked products - which ones'}
       icon="download"
       size="xl"
       onClose={onClose}
@@ -660,7 +662,7 @@ function ReceiveGoodsModal({
             <p className={`me-auto text-xs ${summary.unlinked ? 'font-semibold text-danger' : 'text-muted-foreground'}`}>{summary.text}</p>
           )}
           <Button onClick={onClose} disabled={busy}>Cancel</Button>
-          <Button variant="primary" onClick={submit} disabled={!ready || busy} loading={busy}>Post receipt</Button>
+          <Button variant="primary" onClick={submit} disabled={!ready || busy} loading={busy}>{addTo ? 'Add to receipt' : 'Post receipt'}</Button>
         </div>
       }
     >
@@ -671,7 +673,7 @@ function ReceiveGoodsModal({
       )}
 
       <div className="mb-3 flex flex-wrap items-start gap-2">
-        <AiScanButton kind="supplier_invoice" label="Scan supplier invoice" onResult={(r, shot) => applyInvoice(r.data, shot)} />
+        {!addTo && <AiScanButton kind="supplier_invoice" label="Scan supplier invoice" onResult={(r, shot) => applyInvoice(r.data, shot)} />}
         <AiScanButton kind="product_label" label="Scan box label" onResult={(r) => applyLabel(r.data)} />
       </div>
       <div className="mb-3 rounded-lg border border-brand/30 bg-brand/[0.04] p-2.5">
@@ -712,7 +714,7 @@ function ReceiveGoodsModal({
         </Card>
       )}
 
-      <div className="grid gap-3 sm:grid-cols-2">
+      {!addTo && <div className="grid gap-3 sm:grid-cols-2">
         <Field label="Against a purchase order" hint="Optional - leave blank for a purchase with no PO">
           <PickList id="grn-order" label="Purchase order" value={orderId} onChange={(v) => (v ? pickOrder(v) : clearOrder())} placeholder="Order no or supplier - or leave empty"
             options={orders.map((o) => ({ id: o.id, label: o.orderNo, sub: o.supplierName }))} />
@@ -747,7 +749,7 @@ function ReceiveGoodsModal({
           <input className="w-full rounded-md border border-border bg-card px-2 py-1.5 text-sm"
             value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Optional" />
         </Field>
-      </div>
+      </div>}
 
       <SectionCard title="Items" icon="package" className="mt-4" bodyClassName="p-0">
         {lines.length === 0 && (
