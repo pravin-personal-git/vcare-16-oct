@@ -1,7 +1,8 @@
 import 'server-only';
 import { withReach, type SalesReach } from './sales-reach';
 import { stageNamer } from './order-stages';
-import { stageLabel } from '@/lib/installation-stages';
+import { normaliseStage, stageLabel } from '@/lib/installation-stages';
+import { statusTone } from '@/lib/job-flow';
 import { db } from './db';
 import { scopeWhere, type StoreScope } from './store-scope';
 import { LIST_MAX_ROWS } from '@/lib/list-limits';
@@ -182,7 +183,7 @@ export async function customer360(scope: StoreScope, partyId: string, via: strin
       id: c.id, type: 'challan', no: c.challanNo, at: c.dispatchedAt, amountPaise: 0,
       // The working stage the installation page shows (G8, 11 Oct 2026); a
       // sent-back one still says so.
-      status: { label: c.status === 'rejected' ? 'Sent back' : stageLabel(c.stage), tone: c.status === 'approved' ? 'success' : c.status === 'rejected' ? 'danger' : 'info' },
+      status: { label: stageLabel(c.stage), tone: statusTone(normaliseStage(c.stage)) },
       note: `${c.items.filter((i) => i.fitStatus !== 'to_fit').length} of ${c.items.length} fitted`, href: `/services/installations/${c.id}`,
       links: c.salesOrderId ? [c.salesOrderId] : [],
     });

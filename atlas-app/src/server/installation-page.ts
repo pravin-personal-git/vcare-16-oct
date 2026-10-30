@@ -4,7 +4,8 @@ import { scopeForWrite, scopeWhere, userInScope, type StoreScope } from './store
 import { InstallationChallanError, setInstallationChallanStatus } from './installation-challans';
 import { applyMovements, type MovementInput } from './stock';
 import { FEED_MAX_ROWS, LIST_MAX_ROWS } from '@/lib/list-limits';
-import { deriveStage, normaliseStage, stageLabel, type InstallStage } from '@/lib/installation-stages';
+import { autoStatus, legacyStatus, normaliseStage, stageLabel, type InstallStage } from '@/lib/installation-stages';
+import { findTransition, SET_BY_THEIR_OWN_ACTION, transitionError, type JobActor, type JobStatus } from '@/lib/job-flow';
 
 /**
  * ONE INSTALLATION, ITS OWN PAGE - rebuilt like a complaint (27 Oct 2026,
@@ -47,8 +48,8 @@ async function own(scope: StoreScope, id: string) {
   return { ...c, storeId };
 }
 
-/** Billed, or closed without a bill: nothing on it changes any more. */
-const closed = (c: { isInvoiced: boolean; notBilledReason: string | null }) => c.isInvoiced || !!c.notBilledReason;
+/** Billed, closed without a bill, or cancelled: nothing on it changes any more. */
+const closed = (c: { isInvoiced: boolean; notBilledReason: string | null; stage: string }) => c.isInvoiced || !!c.notBilledReason || c.stage === 'cancelled';
 
 /**
  * Put the stored stage where the facts say it is, and log the move. Called
@@ -67,16 +68,127 @@ export async function syncInstallationStage(challanId: string, userId: string | 
     },
   });
   if (!c) return null;
-  const to = deriveStage({
+  const to = autoStatus(c.stage, {
     status: c.status, isInvoiced: c.isInvoiced, notBilledReason: c.notBilledReason,
     team: c._count.assignees, visits: c.visits.length,
     onSite: c.items.length > 0 || c.visits.some((v) => !!v.checkedInAt),
   });
   if (to !== c.stage) {
     await db.installationChallan.update({ where: { id: c.id }, data: { stage: to } });
-    await log(c.storeId, c.id, userId, 'Stage', `Now at ${stageLabel(to)}`, c.stage, to);
+    await log(c.storeId, c.id, userId, 'Status', `Now ${stageLabel(to)}`, c.stage, to);
   }
   return to;
+}
+
+/**
+ * One step by the complaint's rulebook (30 Oct 2026, Vcare): the office's
+ * status picker, and the technician's Accept, Decline, On the way and Leave
+ * site. Closing is Bill this installation or Don't bill, so not here.
+ */
+export async function moveInstallation(scope: StoreScope, id: string, to: string, actor: JobActor, userId: string, note?: string | null): Promise<void> {
+  const c = await own(scope, id);
+  if (c.isInvoiced || c.notBilledReason) throw new InstallationChallanError('This installation is billed, so it is closed.');
+  const from = normaliseStage(c.stage);
+  if (to === 'closed') throw new InstallationChallanError('An installation closes when it is billed - use Bill this installation, or Don’t bill with a reason.');
+  if (actor === 'office' && (SET_BY_THEIR_OWN_ACTION as readonly string[]).includes(to)) throw new InstallationChallanError('Book a visit to set Visit booked.');
+  if (actor === 'technician') await mustBeOnTeam(id, userId);
+  const rule = findTransition(from, to, actor);
+  if (!rule) throw new InstallationChallanError(transitionError(from, to));
+  const stage = to as JobStatus;
+  // The office marking it done for the technician: what Work done does to the items and warranty.
+  if ((stage === 'awaiting_customer' || stage === 'resolved') && !['work_done', 'approved'].includes(c.status)) {
+    await setInstallationChallanStatus(scope, { id, to: 'work_done' }, userId);
+  }
+  await db.installationChallan.update({ where: { id }, data: { stage, status: legacyStatus(stage, c.status) } });
+  // Decline: he comes off the team, so it waits for the office to name someone.
+  if (rule.action === 'decline') await db.installationChallanAssignee.deleteMany({ where: { challanId: id, userId } });
+  await log(c.storeId, id, userId, 'Status', `${stageLabel(from)} → ${stageLabel(stage)}${note?.trim() ? `: ${note.trim()}` : ''}`, from, stage);
+  if (stage === 'awaiting_customer') await issueInstallationOtp(c.storeId, id);
+  await syncInstallationStage(id, userId);
+}
+
+async function mustBeOnTeam(id: string, userId: string) {
+  if (!await db.installationChallanAssignee.count({ where: { challanId: id, userId } })) {
+    throw new InstallationChallanError('You are not on this installation\'s team.');
+  }
+}
+
+// ------------------------------------------------ the customer's code (30 Oct 2026)
+
+const OTP_MINUTES = 30;
+const OTP_TRIES = 5;
+const APP_URL = process.env.NEXT_PUBLIC_APP_URL || 'https://atlas.nairsolutions.org';
+
+/** A new sign-off code for the customer, as a complaint's (job-signoff `issueOtp`). */
+async function issueInstallationOtp(storeId: string, id: string): Promise<void> {
+  const { randomInt } = await import('node:crypto');
+  const code = String(randomInt(0, 1_000_000)).padStart(6, '0');
+  await db.jobOtp.updateMany({ where: { installationChallanId: id, usedAt: null }, data: { expiresAt: new Date() } });
+  await db.jobOtp.create({ data: { storeId, installationChallanId: id, code, expiresAt: new Date(Date.now() + OTP_MINUTES * 60_000) } });
+  const c = await db.installationChallan.findUnique({
+    where: { id },
+    select: { challanNo: true, publicToken: true, customer: { select: { email: true, phone: true, firstName: true, companyName: true } }, salesOrder: { select: { customerName: true, phone: true } } },
+  });
+  if (!c) return;
+  const { sendCustomerMessage } = await import('./notify');
+  await sendCustomerMessage(
+    { email: c.customer?.email ?? null, phone: c.customer?.phone ?? c.salesOrder?.phone ?? null, name: c.customer?.companyName || c.customer?.firstName || c.salesOrder?.customerName || '' },
+    `Your code for ${c.challanNo}`,
+    `The technician has finished the installation. If it is working, give them this code: ${code}. It works for ${OTP_MINUTES} minutes.`,
+    c.publicToken ? `${APP_URL}/c/${c.publicToken}` : undefined,
+    storeId,
+  ).catch(() => null);
+}
+
+async function waitingForCustomer(scope: StoreScope, id: string, userId: string) {
+  const c = await own(scope, id);
+  await mustBeOnTeam(id, userId);
+  if (normaliseStage(c.stage) !== 'awaiting_customer') throw new InstallationChallanError('This job is not waiting for the customer.');
+  return c;
+}
+
+async function toResolved(c: { storeId: string; stage: string; status: string }, id: string, userId: string, body: string) {
+  await db.installationChallan.update({ where: { id }, data: { stage: 'resolved', status: legacyStatus('resolved', c.status) } });
+  await log(c.storeId, id, userId, 'Status', body, c.stage, 'resolved');
+}
+
+/** The technician types the customer's code. */
+export async function verifyInstallationOtp(scope: StoreScope, id: string, code: string, userId: string): Promise<void> {
+  const c = await waitingForCustomer(scope, id, userId);
+  const otp = await db.jobOtp.findFirst({ where: { installationChallanId: id, usedAt: null }, orderBy: { createdAt: 'desc' } });
+  if (!otp || otp.expiresAt < new Date()) throw new InstallationChallanError('The code has expired - send the customer a new one.');
+  if (otp.attempts >= OTP_TRIES) throw new InstallationChallanError('Too many wrong tries - send the customer a new code.');
+  if (otp.code !== code.replace(/\D/g, '')) {
+    await db.jobOtp.update({ where: { id: otp.id }, data: { attempts: { increment: 1 } } });
+    throw new InstallationChallanError(`That code is not right. ${OTP_TRIES - otp.attempts - 1} tries left.`);
+  }
+  await db.jobOtp.update({ where: { id: otp.id }, data: { usedAt: new Date() } });
+  await toResolved(c, id, userId, 'Customer confirmed with their code.');
+}
+
+export async function resendInstallationOtp(scope: StoreScope, id: string, userId: string): Promise<void> {
+  const c = await waitingForCustomer(scope, id, userId);
+  await issueInstallationOtp(c.storeId, id);
+}
+
+/** Fallback: the customer said yes but has no code. */
+export async function installationCustomerApproved(scope: StoreScope, id: string, note: string, userId: string): Promise<void> {
+  const why = note.trim();
+  if (!why) throw new InstallationChallanError('Say what the customer said (and why there is no code).');
+  const c = await waitingForCustomer(scope, id, userId);
+  await toResolved(c, id, userId, `Technician: customer approved, please close - ${why}`);
+}
+
+/** The technician's next steps on the phone, from the complaint's rulebook. */
+export function installationTechActions(stage: string, onTeam: boolean): string[] {
+  if (!onTeam) return [];
+  const s = normaliseStage(stage);
+  if (s === 'assigned') return ['accept', 'decline'];
+  if (s === 'awaiting_customer') return ['enter_otp', 'resend_otp', 'customer_approved'];
+  const out: string[] = [];
+  if (findTransition(s, 'on_the_way', 'technician')) out.push('on_the_way');
+  if (s === 'on_site') out.push('leave_site');
+  return out;
 }
 
 export interface InstallationPage {
@@ -218,9 +330,17 @@ export async function markInstallationWorkDone(scope: StoreScope, id: string, us
   }
   await setInstallationChallanStatus(scope, { id, to: 'work_done' }, userId);
   await log(c.storeId, id, userId, 'Work done', `Work done${receivedBy?.trim() ? ` - received by ${receivedBy.trim()}` : ''}. Warranty starts today.`, c.status, 'work_done');
+  // As a complaint's Work done: the customer's code, or straight to Waiting to close with it off.
+  const { getJobSettings } = await import('./job-settings');
+  if ((await getJobSettings(c.storeId)).customerOtp === 'off') {
+    const now = await db.installationChallan.findUnique({ where: { id }, select: { stage: true, status: true } });
+    if (now && normaliseStage(now.stage) === 'awaiting_customer') await toResolved({ storeId: c.storeId, ...now }, id, userId, 'Waiting to close (no customer code needed).');
+  } else {
+    await issueInstallationOtp(c.storeId, id);
+  }
 }
 
-/** Send back from Work done, with a reason: the job goes back to Fitting. */
+/** Send back from Work done, with a reason: the job goes back to In progress. */
 export async function sendBackInstallation(scope: StoreScope, id: string, reason: string, userId: string): Promise<void> {
   const c = await own(scope, id);
   if (closed(c)) throw new InstallationChallanError('This installation is billed, so it is closed.');

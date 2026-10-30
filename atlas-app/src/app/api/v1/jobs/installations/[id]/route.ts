@@ -1,9 +1,12 @@
 import { field, jsonBody, str, V1Error } from '@/server/auth/v1-staff';
 import { db } from '@/server/db';
 import { scanUnitOntoChallan, technicianInstallation } from '@/server/field-app';
-import { markInstallationWorkDone, setInstallationStage, updateInstallationItems } from '@/server/installation-page';
+import {
+  installationCustomerApproved, installationTechActions, markInstallationWorkDone, moveInstallation, resendInstallationOtp, setInstallationStage,
+  updateInstallationItems, verifyInstallationOtp,
+} from '@/server/installation-page';
 import { requestInstallationReturn } from '@/server/installation-returns';
-import { editJobChallan, INSTALL_WORK_STAGES, phoneInstallationParts, raiseInstallationChallan, requestPartsReturn, withdrawJobChallan } from '@/server/job-challans';
+import { editJobChallan, isInstallWorking, phoneInstallationParts, raiseInstallationChallan, requestPartsReturn, withdrawJobChallan } from '@/server/job-challans';
 import type { ResolvedAccess } from '@/lib/app-access';
 
 type Params = { params: Promise<{ id: string }> };
@@ -37,11 +40,14 @@ export async function GET(req: Request, { params }: Params) {
     */
     const team = await db.installationChallanAssignee.findMany({ where: { challanId: id }, select: { userId: true } });
     const store = await db.installationChallan.findUnique({ where: { id }, select: { storeId: true } });
+    const onTeam = team.some((t) => t.userId === ctx.user.id);
     return {
       installation: c,
       canEdit,
-      onTeam: team.some((t) => t.userId === ctx.user.id),
-      working: (INSTALL_WORK_STAGES as readonly string[]).includes(c.stage),
+      onTeam,
+      working: isInstallWorking(c.stage),
+      // A complaint's steps (30 Oct 2026): accept | decline | on_the_way | leave_site | enter_otp | resend_otp | customer_approved.
+      actions: canEdit ? installationTechActions(c.stage, onTeam) : [],
       parts: canEdit && partsOn(access) && store ? await phoneInstallationParts(ctx.scope, id, store.storeId, ctx.user.id) : null,
     };
   });
@@ -77,6 +83,25 @@ export async function POST(req: Request, { params }: Params) {
       // two screens.
       // Optional "received by" from builds 1.0.33 on (27 Oct 2026): who took it over on site.
       await markInstallationWorkDone(ctx.scope, id, ctx.user.id, str(b.receivedBy, 120) || null);
+      return { ok: true };
+    }
+
+    // A complaint's steps, by the same rulebook (30 Oct 2026).
+    const STEP_TO: Record<string, string> = { accept: 'accepted', decline: 'received', on_the_way: 'on_the_way', leave_site: 'in_progress' };
+    if (action && STEP_TO[action]) {
+      await moveInstallation(ctx.scope, id, STEP_TO[action], 'technician', ctx.user.id, str(b.reason, 500) || null);
+      return { ok: true };
+    }
+    if (action === 'enter_otp') {
+      await verifyInstallationOtp(ctx.scope, id, str(b.code, 12) ?? '', ctx.user.id);
+      return { ok: true };
+    }
+    if (action === 'resend_otp') {
+      await resendInstallationOtp(ctx.scope, id, ctx.user.id);
+      return { ok: true };
+    }
+    if (action === 'customer_approved') {
+      await installationCustomerApproved(ctx.scope, id, str(b.note, 1000) ?? '', ctx.user.id);
       return { ok: true };
     }
 

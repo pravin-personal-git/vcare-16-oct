@@ -5,7 +5,7 @@ import { getJobSettings } from './job-settings';
 import { listTechnicians } from './complaints';
 import { slaChecks } from '@/lib/job-sla';
 import { OFFICE_LABEL, type JobStatus } from '@/lib/job-flow';
-import { stageLabel } from '@/lib/installation-stages';
+import { normaliseStage, stageLabel } from '@/lib/installation-stages';
 import { LIST_MAX_ROWS } from '@/lib/list-limits';
 import { sortWork, workRow, type WorkRow } from '@/lib/my-work';
 
@@ -107,14 +107,12 @@ export async function officeJobs(scope: StoreScope, now: Date = new Date()) {
         customerName: (ch.customer && (ch.customer.companyName || [ch.customer.firstName, ch.customer.lastName].filter(Boolean).join(' '))) || ch.salesOrder?.organizationName || ch.salesOrder?.customerName || 'No customer on the challan',
         siteLocation: ch.siteLocation ?? ch.salesOrder?.shippingAddress ?? ch.customer?.addressLine1 ?? null,
         problem: `Installation - ${qty} item${qty === 1 ? '' : 's'}`,
-        status: ch.status, statusLabel: ch.status === 'work_done' ? 'Work done - to bill' : stageLabel(ch.stage), priority: ch.priority,
+        status: normaliseStage(ch.stage), statusLabel: stageLabel(ch.stage), priority: ch.priority,
         givenAt: ch.dispatchedAt, visits: ch.visits, customerPhone: ch.customer?.phone ?? ch.salesOrder?.phone ?? null,
         lat: ch.siteLat ? Number(ch.siteLat) : null, lng: ch.siteLng ? Number(ch.siteLng) : null,
       }, now);
       const ids = ch.assignees.map((a) => a.userId);
-      const group: OfficeGroup = ch.status === 'work_done' ? 'waiting'
-        : ids.length === 0 ? 'unassigned'
-          : ['fitting', 'installing', 'testing', 'handover'].includes(ch.stage) ? 'working' : 'todo';
+      const group = complaintGroup(normaliseStage(ch.stage), ids.length > 0);
       return {
         ...row, group, createdAt: ch.createdAt.toISOString(),
         technicianIds: ids, technicianNames: ids.map((id) => nameOf.get(id) ?? 'Technician'),

@@ -1,4 +1,5 @@
 import 'server-only';
+import { isInstallWorking } from '@/lib/installation-stages';
 import type { Prisma } from '@prisma/client';
 import { db } from './db';
 import { publicBrandUrl } from './storage';
@@ -229,10 +230,10 @@ export async function raiseInstallationChallan(
     select: { id: true, stage: true, status: true, isInvoiced: true, notBilledReason: true, assignees: { select: { userId: true } } },
   });
   if (!job) throw new ComplaintError('That installation is not in your branch.');
-  if (job.isInvoiced || job.notBilledReason || job.stage === 'billed') throw new ComplaintError('This installation is billed and finished - nothing more goes out on it.');
+  if (job.isInvoiced || job.notBilledReason || ['closed', 'cancelled', 'billed'].includes(job.stage)) throw new ComplaintError('This installation is billed and finished - nothing more goes out on it.');
   if (actor === 'technician') {
     if (!job.assignees.some((a) => a.userId === userId)) throw new ComplaintError('You are not on this installation\'s team.');
-    if (!(INSTALL_WORK_STAGES as readonly string[]).includes(job.stage)) throw new ComplaintError('Material is asked for while the job is on - this one is at Work done or billed.');
+    if (!isInstallWorking(job.stage)) throw new ComplaintError('Material is asked for while the job is on - this one is at Work done or billed.');
     await assertActionAllowed(storeId, 'raise_challan', 'technician');
   }
   // A replacement takes a customer's old unit out - that is a complaint's job, not a new fitting.
@@ -240,8 +241,8 @@ export async function raiseInstallationChallan(
   return createChallan(scope, { storeId, complaintId: null, installationChallanId }, type, input, userId);
 }
 
-/** Installation stages in which the technician is working on the site. */
-export const INSTALL_WORK_STAGES = ['technician', 'visit', 'fitting', 'survey', 'material_ready', 'installing', 'testing'] as const;
+/** Installation statuses in which the technician is working on the site. */
+export { isInstallWorking };
 
 /** The lines checked, the challan numbered and logged, and sent for approval. */
 async function createChallan(

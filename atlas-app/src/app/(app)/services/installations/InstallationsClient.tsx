@@ -20,13 +20,14 @@ import { searchGoodsAction, searchOpenOrdersAction, customerSurveysAction, type 
 import { CustomerPicker } from '@/components/services/CustomerPicker';
 import { SitePicker, type SiteChoice } from '@/components/services/SitePicker';
 import { istDate } from '@/lib/date-ranges';
+import { OFFICE_LABEL, WORKING_STATUSES } from '@/lib/job-flow';
 import {
-  setChallanStatusAction, updatePaperworkAction,
+  installWorkDoneAction, setChallanStatusAction, updatePaperworkAction,
   createInstallationChallanAction, loadInstallationChallanDetailAction, updateInstallationChallanAction,
 } from './actions';
 
 type Challan = {
-  id: string; challanNo: string; legacyRef: string | null; status: string;
+  id: string; challanNo: string; legacyRef: string | null; status: string; stage: string; priority: string;
   physicalChallanNo: string | null; technicianRemark: string | null; note: string | null;
   siteLocation?: string | null; sitePin?: { lat: number; lng: number } | null;
   isInvoiced?: boolean; invoice?: { id: string; invoiceNo: string } | null;
@@ -37,12 +38,8 @@ type Challan = {
 type StaffOption = { id: string; fullName: string };
 type Item = { id: string; srNo: number; productName: string; barcode: string | null; qty: number; unit: string | null };
 
-const STATUS_LABEL: Record<string, string> = {
-  pending: 'Pending', work_done: 'Work done', approved: 'Billed / closed',
-  rejected: 'Rejected', legacy_unknown: 'Not recorded',
-};
-/** The shared colour for each challan word (lib/status-tones). */
-const toneKey = (s: string) => (s === 'work_done' ? 'done' : s === 'legacy_unknown' ? 'not_recorded' : s);
+/** A complaint's words and colours (30 Oct 2026). */
+const STATUS_LABEL: Record<string, string> = OFFICE_LABEL;
 
 const fieldClass = 'w-full rounded-lg border border-border bg-background px-2.5 py-2 text-sm text-foreground';
 const btn = 'inline-flex h-8 items-center gap-1.5 rounded-sm border border-border bg-card px-3 text-xs font-semibold shadow-card transition hover:bg-muted disabled:opacity-50';
@@ -86,11 +83,17 @@ export function InstallationsClient({
   const router = useRouter();
 
   const cards: KpiCard[] = [
-    { key: 'pending', label: 'Pending', count: counts.pending ?? 0, icon: 'clock', tone: 'info' },
-    { key: 'work_done', label: 'Work done', count: counts.work_done ?? 0, icon: 'check', tone: 'success' },
-    { key: 'approved', label: 'Billed / closed', count: counts.approved ?? 0, icon: 'check-circle', tone: 'success' },
-    { key: 'rejected', label: 'Sent back', count: counts.rejected ?? 0, icon: 'x-circle', tone: 'danger' },
-    { key: 'legacy_unknown', label: 'Not recorded', count: counts.legacy_unknown ?? 0, icon: 'info' },
+    // The complaint list's cards (30 Oct 2026).
+    { key: 'open', label: 'Open', count: counts.open ?? 0, icon: 'alert-circle', tone: 'brand' },
+    { key: 'unassigned', label: 'No technician', count: counts.unassigned ?? 0, icon: 'user-plus', tone: counts.unassigned ? 'warning' : 'default' },
+    { key: 'urgent', label: 'Urgent / high', count: counts.urgent ?? 0, icon: 'alert-triangle', tone: counts.urgent ? 'danger' : 'default' },
+    { key: 'received', label: 'New', count: counts.received ?? 0, icon: 'clock' },
+    { key: 'assigned', label: 'Waiting for technician', count: counts.assigned ?? 0, icon: 'user-plus', tone: counts.assigned ? 'warning' : 'default' },
+    { key: 'in_progress', label: 'In the field', count: counts.in_progress ?? 0, icon: 'refresh' },
+    { key: 'awaiting_customer', label: 'Waiting for customer', count: counts.awaiting_customer ?? 0, icon: 'user' },
+    { key: 'resolved', label: 'Waiting to close', count: counts.resolved ?? 0, icon: 'check-circle', tone: 'success' },
+    { key: 'closed', label: 'Closed', count: counts.closed ?? 0, icon: 'check-circle' },
+    { key: 'cancelled', label: 'Cancelled', count: counts.cancelled ?? 0, icon: 'ban' },
   ];
 
   function run(fn: () => Promise<{ error?: string }>) {
@@ -158,11 +161,8 @@ export function InstallationsClient({
                   <div className="flex flex-wrap items-center gap-2">
                     <Link href={`/services/installations/${c.id}`} className="font-mono text-xs font-semibold text-brand hover:underline">{c.challanNo}</Link>
                     <Link href={`/services/installations/${c.id}`} className="rounded-full bg-brand/10 px-2 py-0.5 text-cap font-semibold text-on-tint-brand hover:bg-brand/15">Open page</Link>
-                    <span title={c.status === 'legacy_unknown'
-                      ? 'This slip predates the approval column, and its real state could not be recovered from the old system.'
-                      : undefined}>
-                      <StatusBadge status={toneKey(c.status)} label={STATUS_LABEL[c.status] ?? c.status} />
-                    </span>
+                    <StatusBadge status={c.stage} label={STATUS_LABEL[c.stage] ?? c.stage} />
+                    {c.priority !== 'normal' && c.priority !== 'low' && <Badge tone={c.priority === 'urgent' ? 'danger' : 'warning'}>{c.priority}</Badge>}
                     {c.physicalChallanNo && (
                       <Badge tone="neutral" icon="file-text" title="The number on the paper slip the customer signed">
                         Slip {c.physicalChallanNo}
@@ -211,20 +211,20 @@ export function InstallationsClient({
                   {expanded === c.id ? 'Hide items' : 'Items'}
                 </button>
 
-                {canEdit && (c.status === 'pending' || c.status === 'rejected' || c.status === 'legacy_unknown') && (
+                {canEdit && (WORKING_STATUSES as readonly string[]).includes(c.stage) && (
                   <button type="button" className={btn} disabled={pending}
-                    onClick={() => run(() => setChallanStatusAction({ id: c.id, to: 'work_done' }))}>
+                    onClick={() => run(() => installWorkDoneAction(c.id, null))}>
                     Mark work done
                   </button>
                 )}
                 {/* Billing is the sign-off now (27 Oct 2026) - done on the installation's page. */}
-                {c.status === 'work_done' && !c.isInvoiced && (
+                {(c.stage === 'awaiting_customer' || c.stage === 'resolved') && !c.isInvoiced && (
                   <Link href={`/services/installations/${c.id}`} className={btn}>
                     <Icon name="file-text" className="h-3.5 w-3.5" />
                     Bill
                   </Link>
                 )}
-                {canEdit && c.status !== 'approved' && c.status !== 'rejected' && (
+                {canEdit && (c.stage === 'awaiting_customer' || c.stage === 'resolved') && !c.isInvoiced && (
                   <button type="button" className={btn} disabled={pending}
                     onClick={() => { setRejecting(c.id); setReason(''); }}>
                     Send back

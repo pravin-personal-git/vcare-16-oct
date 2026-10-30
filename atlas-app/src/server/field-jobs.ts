@@ -4,7 +4,7 @@ import { scopeWhere, type StoreScope } from './store-scope';
 import { getJobSettings } from './job-settings';
 import { slaChecks } from '@/lib/job-sla';
 import { OFFICE_LABEL, type JobStatus } from '@/lib/job-flow';
-import { stageLabel } from '@/lib/installation-stages';
+import { normaliseStage, stageLabel } from '@/lib/installation-stages';
 import { LIST_MAX_ROWS } from '@/lib/list-limits';
 import { scheduleDay, sortWork, workRow, type ScheduleVisit, type WorkRow } from '@/lib/my-work';
 
@@ -119,7 +119,7 @@ export async function myWork(scope: StoreScope, userId: string, opts: { withInst
         customerName: (ch.customer ? person(ch.customer) : null) || ch.salesOrder?.organizationName || ch.salesOrder?.customerName || 'No customer on the challan',
         siteLocation: ch.siteLocation ?? ch.salesOrder?.shippingAddress ?? ch.salesOrder?.billingAddress ?? null,
         problem: `Installation - ${qty} item${qty === 1 ? '' : 's'}`,
-        status: ch.status, statusLabel: stageLabel(ch.stage), priority: ch.priority,
+        status: normaliseStage(ch.stage), statusLabel: stageLabel(ch.stage), priority: ch.priority,
         givenAt: ch.assignees[0]?.assignedAt && ch.assignees[0].assignedAt > ch.dispatchedAt ? ch.assignees[0].assignedAt : ch.dispatchedAt,
         visits: ch.visits, customerPhone: ch.customer?.phone ?? ch.salesOrder?.phone ?? null,
         lat: ch.siteLat ? Number(ch.siteLat) : null, lng: ch.siteLng ? Number(ch.siteLng) : null,
@@ -245,7 +245,7 @@ export async function searchWork(
           customerName: (ch.customer ? person(ch.customer) : null) || ch.salesOrder?.organizationName || ch.salesOrder?.customerName || 'No customer on the challan',
           siteLocation: ch.siteLocation ?? ch.salesOrder?.shippingAddress ?? null,
           problem: `Installation - ${qty} item${qty === 1 ? '' : 's'}`,
-          status: ch.status, statusLabel: stageLabel(ch.stage), priority: ch.priority,
+          status: normaliseStage(ch.stage), statusLabel: stageLabel(ch.stage), priority: ch.priority,
           givenAt: ch.dispatchedAt, visits: ch.visits, customerPhone: ch.customer?.phone ?? ch.salesOrder?.phone ?? null,
           lat: ch.siteLat ? Number(ch.siteLat) : null, lng: ch.siteLng ? Number(ch.siteLng) : null,
         }, now),

@@ -2,7 +2,7 @@ import { field, jsonBody, str, V1Error } from '@/server/auth/v1-staff';
 import { db } from '@/server/db';
 import { visitDetail } from '@/server/field-app';
 import { rescheduleVisit } from '@/server/complaints';
-import { INSTALL_WORK_STAGES, phoneInstallationParts, phoneJobParts } from '@/server/job-challans';
+import { isInstallWorking, phoneInstallationParts, phoneJobParts } from '@/server/job-challans';
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -43,7 +43,7 @@ export async function GET(req: Request, { params }: Params) {
         : inst && v.installationChallanId ? await phoneInstallationParts(ctx.scope, v.installationChallanId, inst.storeId, ctx.user.id)
         : null,
       // Material is asked for while the job is worked on site.
-      partsOnSite: job ? job.status === 'on_site' : inst ? (INSTALL_WORK_STAGES as readonly string[]).includes(inst.stage) : false,
+      partsOnSite: job ? job.status === 'on_site' : inst ? isInstallWorking(inst.stage) : false,
     };
   });
 }

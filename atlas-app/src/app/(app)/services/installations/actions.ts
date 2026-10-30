@@ -12,7 +12,7 @@ import {
 import type { ReceiptMethod } from '@/server/receipts';
 import {
   addInstallationItem, addInstallationRemark, pickInstallationLineSerials, billInstallation, changeInstallationItemQty, installationBillDraft,
-  changeInstallationSite, markInstallationWorkDone, removeInstallationItem, sendBackInstallation, setInstallationCustomer, setInstallationTeam, updateInstallationItems,
+  changeInstallationSite, markInstallationWorkDone, moveInstallation, removeInstallationItem, sendBackInstallation, setInstallationCustomer, setInstallationTeam, updateInstallationItems,
   waiveInstallationBilling, type InstallationBillDraft,
 } from '@/server/installation-page';
 import { friendlyError } from '@/lib/friendly-error';
@@ -168,6 +168,10 @@ async function pageGuard(id: string, run: (ctx: Awaited<ReturnType<typeof requir
   }
 }
 
+/** The office's status picker - a complaint's rulebook (30 Oct 2026). */
+export async function installStatusAction(id: string, to: string, note: string | null): Promise<ActionState> {
+  return pageGuard(id, (ctx) => moveInstallation(ctx.scope, id, to, 'office', ctx.user.id, note));
+}
 export async function installWorkDoneAction(id: string, receivedBy: string | null): Promise<ActionState> {
   return pageGuard(id, (ctx) => markInstallationWorkDone(ctx.scope, id, ctx.user.id, receivedBy));
 }

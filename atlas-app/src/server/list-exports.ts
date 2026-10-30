@@ -1,4 +1,5 @@
 import 'server-only';
+import { stageLabel } from '@/lib/installation-stages';
 import { stageNamer } from './order-stages';
 import { isDayKey, istToday, monthDays } from '@/lib/attendance-day';
 import { istDayEnd, istDayStart } from '@/lib/date-ranges';
@@ -190,7 +191,7 @@ export const LIST_EXPORTS: Record<string, ListExport> = {
           { header: 'Customer', value: (c) => c.customerName ?? 'No customer on file' },
           { header: 'Lines', value: (c) => c.itemCount },
           { header: 'Units', value: (c) => c.totalQty },
-          { header: 'Status', value: (c) => CHALLAN_STATUS[c.status] ?? c.status },
+          { header: 'Status', value: (c) => stageLabel(c.stage) },
           { header: 'Assigned to', value: (c) => c.assignees.join(', ') },
           { header: 'Paper slip', value: (c) => c.physicalChallanNo ?? '' },
           { header: 'Technician remark', value: (c) => c.technicianRemark ?? '' },

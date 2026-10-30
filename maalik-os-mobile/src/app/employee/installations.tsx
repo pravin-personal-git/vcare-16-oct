@@ -5,7 +5,7 @@ import { Banner } from '@/components/ui';
 import { Empty, Loading, Pill, Row, Segmented, SubScreen, fmtDate, useLoad } from '@/components/Kit';
 import { TopTabs } from '@/components/TopTabs';
 import { DateFilter, inDateRange, type DateKey } from '@/components/DateFilter';
-import { myInstallations, type InstallationRow } from '@/lib/jobs';
+import { myInstallations, STATUS_LABEL, statusTone, type InstallationRow } from '@/lib/jobs';
 import { useAccess } from '@/lib/access';
 
 /**
@@ -74,10 +74,13 @@ export default function Installations() {
               // be scanned as they go in. A job showing 0 is a job that can be
               // handed over.
               ? <Pill label={`${r.unscanned} ${t('to scan')}`} tone="warning" />
-              : r.stageLabel && r.status === 'pending'
-                // The working stage while it is still open (servers from 11 Oct 2026).
-                ? <Pill label={t(r.stageLabel)} tone="brand" />
-                : <Pill label={label(r.status)} tone={tone(r.status)} />
+              // A complaint's status (servers from 30 Oct 2026), the same words and colours.
+              : r.stage && STATUS_LABEL[r.stage]
+                ? <Pill label={t(STATUS_LABEL[r.stage])} tone={statusTone(r.stage)} />
+                : r.stageLabel && r.status === 'pending'
+                  // The working stage while it is still open (servers from 11 Oct 2026).
+                  ? <Pill label={t(r.stageLabel)} tone="brand" />
+                  : <Pill label={label(r.status)} tone={tone(r.status)} />
           }
         />
       ))}

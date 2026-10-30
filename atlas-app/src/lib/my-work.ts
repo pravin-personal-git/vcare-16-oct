@@ -68,7 +68,6 @@ const DONE_STATUSES = ['resolved', 'closed', 'cancelled'];
 
 /** Whose move it is, from the job's status. */
 export function workStage(kind: WorkKind, status: string): WorkStage {
-  if (kind === 'installation') return ['pending', 'rejected'].includes(status) ? 'working' : 'done';
   if (DONE_STATUSES.includes(status)) return 'done';
   if (NEW_STATUSES.includes(status)) return 'new';
   if (WAITING_STATUSES.includes(status)) return 'waiting';
@@ -87,12 +86,11 @@ export function workRow(j: WorkInput, now: Date = new Date()): WorkRow {
   // A visit whose time has passed with nobody on site.
   const missedVisit = upcoming.find((v) => v.scheduledAt.getTime() < now.getTime() - MISSED_AFTER_MS && !v.checkedInAt);
   // An installation is sent out to be fitted that day; still open on a later day is late.
-  const installOverdue = j.kind === 'installation' && j.status === 'pending' && upcoming.length === 0
-    && istDayKey(j.givenAt) < todayKey;
   const stage = workStage(j.kind, j.status);
-  const onSite = j.kind === 'complaint'
-    ? ['on_site', 'in_progress'].includes(j.status) || upcoming.some((v) => !!v.checkedInAt)
-    : upcoming.some((v) => !!v.checkedInAt);
+  // Installations carry a complaint's statuses since 30 Oct 2026.
+  const installOverdue = j.kind === 'installation' && (stage === 'new' || stage === 'working') && upcoming.length === 0
+    && istDayKey(j.givenAt) < todayKey;
+  const onSite = ['on_site', 'in_progress'].includes(j.status) || upcoming.some((v) => !!v.checkedInAt);
   /*
     Late only where the next move is theirs (28 Oct 2026). A job waiting on
     the customer's estimate approval misses its deadline while it waits; it

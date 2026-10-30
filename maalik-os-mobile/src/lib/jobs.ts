@@ -295,7 +295,7 @@ export const myInstallations = (all = false) =>
  * this person may send goods back and ask for material. Absent from an older server.
  */
 export const installation = (id: string) =>
-  authed<{ installation: InstallationDetail; canEdit: boolean; onTeam?: boolean; working?: boolean; parts?: JobParts | null }>(`/api/v1/jobs/installations/${id}`);
+  authed<{ installation: InstallationDetail; canEdit: boolean; onTeam?: boolean; working?: boolean; parts?: JobParts | null; actions?: JobAction[] }>(`/api/v1/jobs/installations/${id}`);
 
 /** N of an item are unused and coming back - a request; the store receives them (22 Oct 2026). */
 export const returnInstallationItem = (id: string, challanItemId: string, qty: number) =>

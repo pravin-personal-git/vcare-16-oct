@@ -9,11 +9,12 @@ import { Scanner } from '@/components/Scanner';
 import { Icon } from '@/components/Icon';
 import { JobMedia } from '@/components/JobMedia';
 import { JobPartsCard } from '@/components/JobPartsCard';
+import { JobNextStep } from '@/components/JobNextStep';
 import { Waiting } from '@/components/OfflineBar';
 import { isQueued } from '@/lib/outbox';
 import {
   installation, installationPartsAction, installationWorkDone, returnInstallationItem, scanOntoInstallation,
-  updateInstallationItem, type InstallationItem,
+  STATUS_LABEL, statusTone, updateInstallationItem, type InstallationItem,
 } from '@/lib/jobs';
 import { dialable, useAccess } from '@/lib/access';
 import { space } from '@/theme/tokens';
@@ -133,6 +134,23 @@ export default function Installation() {
     }
   };
 
+  /** A complaint's step on the installation (30 Oct 2026) - Accept, On my way, the customer's code. */
+  const [stepBusy, setStepBusy] = useState<string | null>(null);
+  const stepAct = async (key: string, body: Record<string, unknown>, done?: string) => {
+    setStepBusy(key); setProblem(null); setNotice(null);
+    try {
+      const r = await installationPartsAction(String(id), body);
+      setNotice(isQueued(r) ? t(r.message) : done ? t(done) : null);
+      await reload();
+      return {};
+    } catch (e) {
+      setProblem(e instanceof Error ? t(e.message) : t('Could not reach the server. Check the connection and try again.'));
+      return null;
+    } finally {
+      setStepBusy(null);
+    }
+  };
+
   if (loading && !j) return <SubScreen title={t('Installation')}><Loading /></SubScreen>;
   if (!j) {
     return (
@@ -154,7 +172,7 @@ export default function Installation() {
       title={j.challanNo}
       subtitle={j.customerName}
       onRefresh={reload}
-      footer={canEdit && (j.status === 'pending' || j.status === 'rejected') ? (
+      footer={canEdit && (j.status === 'pending' || j.status === 'rejected') && j.stage !== 'received' && j.stage !== 'assigned' && j.stage !== 'cancelled' ? (
         <Button
           label={left > 0 ? `${t('Mark work done')} (${left} ${t('not scanned')})` : t('Mark work done')}
           onPress={finish}
@@ -202,16 +220,14 @@ export default function Installation() {
       {j.stageLabel && (
         <Card>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: space.sm, flexWrap: 'wrap' }}>
-            <Text variant="small" color={c.inkSoft}>{t('Stage')}</Text>
-            <Pill label={t(j.stageLabel)} tone={j.stage === 'billed' || j.stage === 'work_done' ? 'success' : 'brand'} />
-            {j.stages && (
-              <Text variant="micro" color={c.muted}>
-                {j.stages.findIndex((x) => x.key === j.stage) + 1} / {j.stages.length}
-              </Text>
-            )}
+            <Text variant="small" color={c.inkSoft}>{t('Status')}</Text>
+            {/* A complaint's words and colours (servers from 30 Oct 2026); an older server's stage as it was. */}
+            <Pill label={t(STATUS_LABEL[j.stage ?? ''] ?? j.stageLabel)} tone={STATUS_LABEL[j.stage ?? ''] ? statusTone(j.stage ?? '') : j.stage === 'billed' || j.stage === 'work_done' ? 'success' : 'brand'} />
           </View>
-          {/* The stage moves by itself (27 Oct 2026): Working on site, Work done and the bill move it. */}
         </Card>
+      )}
+      {canEdit && j.stage && (
+        <JobNextStep status={j.stage} state={{ actions: data?.actions ?? [] }} busy={stepBusy} send={stepAct} />
       )}
 
       {/* Site photo and voice note (13 Oct 2026) - the simple layout's switches apply. */}

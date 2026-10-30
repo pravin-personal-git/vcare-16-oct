@@ -49,7 +49,8 @@ const FILTERS: { key: Filter; label: string; test: (j: WorkRow) => boolean }[] =
 ];
 
 export const toneOf = (status: string, kind: WorkRow['kind']): 'brand' | 'success' | 'warning' | 'danger' | 'neutral' => {
-  if (kind === 'installation') return status === 'pending' ? 'brand' : 'success';
+  // An installation on an older server sends its challan word; newer ones a complaint's status.
+  if (kind === 'installation' && ['pending', 'rejected', 'work_done', 'approved'].includes(status)) return status === 'pending' ? 'brand' : 'success';
   if (['assigned', 'received'].includes(status)) return 'warning';
   if (['on_the_way', 'on_site', 'in_progress'].includes(status)) return 'success';
   if (['awaiting_estimate', 'awaiting_customer', 'resolved', 'closed', 'cancelled'].includes(status)) return 'neutral';

@@ -6,7 +6,8 @@ import { getOrderStages } from './order-stages';
 import { customerFiles, type CustomerFile } from './attachments';
 import { shownStages, stageName } from '@/lib/order-stages';
 import { FULFILMENT_FLOW, type FulfilmentStatus } from '@/lib/sales-order-status';
-import { INSTALL_STAGES, isInstallStage, stageIndex } from '@/lib/installation-stages';
+import { normaliseStage } from '@/lib/installation-stages';
+import { customerLabel, customerStep, CUSTOMER_STEPS } from '@/lib/job-flow';
 
 /**
  * A NO-LOGIN LINK FOR EVERY DOCUMENT THE CUSTOMER IS SENT (A2, 11 Oct 2026).
@@ -109,7 +110,7 @@ export async function getOrderByToken(token: string): Promise<PublicOrder | null
     exception: at >= 0 ? null : stageName(cfg, status),
     items: o.items.map((i) => ({ name: i.productName, qty: i.qty, dispatched: i.dispatchedQty })),
     courier: o.awbNo ? { awbNo: o.awbNo } : null,
-    installations: o.installationChallans.map((c) => ({ no: c.challanNo, stage: INSTALL_STAGES[stageIndex(c.stage)]!.label })),
+    installations: o.installationChallans.map((c) => ({ no: c.challanNo, stage: customerLabel(normaliseStage(c.stage)) })),
     files,
   };
 }
@@ -154,8 +155,8 @@ export async function getInstallationByToken(token: string): Promise<PublicInsta
   });
   if (!c || c.deletedAt) return null;
 
-  const stage = isInstallStage(c.stage) ? c.stage : 'planned';
-  const at = stageIndex(stage);
+  // The customer's milestones, as on a complaint's link.
+  const at = customerStep(normaliseStage(c.stage));
   const files = (await customerFiles(c.storeId, [{ docType: 'installation_challan', docId: c.id }])).get(`installation_challan:${c.id}`) ?? [];
 
   return {
@@ -164,7 +165,7 @@ export async function getInstallationByToken(token: string): Promise<PublicInsta
     customerName: c.salesOrder?.customerName ?? null,
     business: business(c.store),
     site: c.siteLocation,
-    steps: INSTALL_STAGES.map((s, i) => ({ label: s.label, done: i <= at, current: i === at })),
+    steps: CUSTOMER_STEPS.map((label, i) => ({ label, done: i <= at, current: i === at })),
     sentBack: c.status === 'rejected',
     nextVisit: c.visits[0]?.scheduledAt ?? null,
     items: c.items.map((i) => ({

@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/Button';
 import { Icon, type IconName } from '@/components/ui/Icon';
-import { Badge, type BadgeTone } from '@/components/ui/Layout';
+import { Badge } from '@/components/ui/Layout';
 import { Modal } from '@/components/ui/Modal';
 import { ActionBar } from '@/components/document/ActionBar';
 import { AttachmentPanel } from '@/components/ui/AttachmentPanel';
@@ -19,6 +19,7 @@ import { docMessage } from '@/lib/wa-message';
 import { openWhatsApp } from '@/lib/wa-open';
 import { formatCurrency } from '@/lib/format';
 import { INSTALL_STAGES, stageIndex, stageLabel } from '@/lib/installation-stages';
+import { officeStatusOptions, statusTone, WORKING_STATUSES } from '@/lib/job-flow';
 import type { InstallationPage, InstallationBillDraft } from '@/server/installation-page';
 import type { FindableProduct } from '@/components/document/ProductFinder';
 import { searchGoodsAction } from '@/app/actions/search-options';
@@ -26,16 +27,11 @@ import { JobParts, type ChallanVM } from '../../complaints/[id]/JobParts';
 import {
   installAddItemAction, installLineSerialsAction, installBillAction, installBillDraftAction, installItemQtyAction, installItemsAction,
   installRemarkAction, installRemoveItemAction, installReturnAction, installSendBackAction, installTeamAction,
-  installCustomerAction, installSiteAction, installWaiveAction, installWorkDoneAction, getInstallationShareLink, updatePaperworkAction,
+  installCustomerAction, installSiteAction, installStatusAction, installWaiveAction, installWorkDoneAction, getInstallationShareLink, updatePaperworkAction,
 } from '../actions';
 
 const fmt = (iso: string) => new Date(iso).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: 'numeric', minute: '2-digit', timeZone: 'Asia/Kolkata' });
 const fmtDay = (iso: string) => new Date(iso).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', timeZone: 'Asia/Kolkata' });
-
-/** One badge at the top: where the job is (27 Oct 2026 - it used to show two). */
-const STAGE_TONE: Record<string, BadgeTone> = {
-  raised: 'neutral', technician: 'info', visit: 'info', fitting: 'brand', work_done: 'warning', billed: 'success',
-};
 
 function Panel({ title, sub, icon, right, children, pad = true }: { title: string; sub?: string; icon?: IconName; right?: React.ReactNode; children: React.ReactNode; pad?: boolean }) {
   return (
@@ -53,8 +49,10 @@ function Panel({ title, sub, icon, right, children, pad = true }: { title: strin
 }
 
 /**
- * ONE INSTALLATION, worked like a complaint (27 Oct 2026, Vcare redesign).
- * The stages move by themselves; items can be added until billed; material
+ * ONE INSTALLATION, worked like a complaint (27 Oct 2026, Vcare redesign) -
+ * with a complaint's statuses since 30 Oct 2026. What happens moves the
+ * status; the office can also pick the next one by the complaint's rulebook.
+ * Items can be added until billed; material
  * goes out only through the Parts card; Bill this installation closes it.
  */
 export function InstallationView({ data: d, files, canEdit, canBill, parts }: {
@@ -97,7 +95,10 @@ export function InstallationView({ data: d, files, canEdit, canBill, parts }: {
   });
 
   const idx = stageIndex(d.stage);
-  const atWorkDone = d.stage === 'work_done';
+  // Work done on the phone: waiting for the customer's code, or to close (= bill).
+  const atWorkDone = d.stage === 'awaiting_customer' || d.stage === 'resolved';
+  // As a complaint: once the technician has accepted (office_work_done).
+  const canMarkDone = (WORKING_STATUSES as readonly string[]).includes(d.stage);
   const fitted = d.items.filter((i) => i.fitStatus !== 'to_fit').length;
   const mapHref = d.site.lat !== null && d.site.lng !== null ? `https://www.google.com/maps/search/?api=1&query=${d.site.lat},${d.site.lng}` : d.site.text ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(d.site.text)}` : null;
 
@@ -106,10 +107,9 @@ export function InstallationView({ data: d, files, canEdit, canBill, parts }: {
     if (d.closed) return null;
     if (atWorkDone && canBill) return { label: 'Bill this installation', icon: 'file-text' as const, onClick: () => setBilling(true), variant: 'success' as const };
     if (locked) return null;
-    if (d.stage === 'raised') return null; // name the technician in Job
-    if (d.stage === 'technician') return { label: 'Schedule a visit', icon: 'calendar' as const, onClick: () => setVisit(true) };
-    if (d.stage === 'visit' || d.stage === 'fitting') return { label: 'Mark work done', icon: 'check-circle' as const, onClick: () => setWorkDone(true) };
-    return null;
+    if (d.stage === 'assigned' || d.stage === 'accepted') return { label: 'Schedule a visit', icon: 'calendar' as const, onClick: () => setVisit(true) };
+    if (canMarkDone) return { label: 'Mark work done', icon: 'check-circle' as const, onClick: () => setWorkDone(true) };
+    return null; // New: name the technician in Job
   })();
 
   return (
@@ -121,8 +121,8 @@ export function InstallationView({ data: d, files, canEdit, canBill, parts }: {
           <div>
             <h1 className="text-h1 font-bold leading-tight">Installation {d.challanNo}</h1>
             <div className="mt-0.5 flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
-              <Badge tone={d.status === 'rejected' ? 'danger' : STAGE_TONE[d.stage] ?? 'neutral'}>
-                {d.status === 'rejected' && !d.closed ? 'Sent back' : d.stage === 'billed' && !d.isInvoiced ? 'Closed - not billed' : stageLabel(d.stage)}
+              <Badge tone={statusTone(d.stage)}>
+                {d.notBilledReason ? 'Closed - not billed' : stageLabel(d.stage)}
               </Badge>
               {d.customer.name ? (d.customer.id ? <Link href={`/customers/${d.customer.id}`} className="hover:text-brand hover:underline">{d.customer.name}</Link> : <span>{d.customer.name}</span>) : <span>No customer on the challan</span>}
               {d.customer.phone && <>· <a href={`tel:${d.customer.phone}`} className="hover:text-brand hover:underline">{d.customer.phone}</a></>}
@@ -197,11 +197,23 @@ export function InstallationView({ data: d, files, canEdit, canBill, parts }: {
         {/* ---- left: actions ---------------------------------------------- */}
         <div className="space-y-4">
           <Panel title="Next">
-            <p className="text-sm">{d.status === 'rejected' && !d.closed ? 'Fix what was sent back, then mark the work done again.' : d.stage === 'billed' && !d.isInvoiced ? 'Closed without a bill.' : INSTALL_STAGES[idx]?.next}</p>
+            <p className="text-sm">{d.stage === 'cancelled' ? 'Cancelled.' : d.status === 'rejected' && !d.closed ? 'Fix what was sent back, then mark the work done again.' : d.notBilledReason ? 'Closed without a bill.' : INSTALL_STAGES[idx]?.next}</p>
             {nextAction && <Button variant={nextAction.variant ?? 'primary'} icon={nextAction.icon} className="mt-3 w-full" loading={pending} onClick={nextAction.onClick}>{nextAction.label}</Button>}
           </Panel>
           <Panel title="Job">
             <div className="space-y-3 text-sm">
+              {/* The complaint's status picker: the current status, then where the office may take it. */}
+              <label className="block">
+                <span className="text-micro font-semibold uppercase text-muted-foreground">Status</span>
+                <select disabled={locked || pending} value={d.stage} className="mt-1 h-9 w-full rounded-sm border border-border bg-card px-2 text-sm"
+                  onChange={(e) => {
+                    const to = e.target.value;
+                    if (to === 'cancelled') setReasonFor({ title: 'Cancel this installation', label: 'Why is it being cancelled?', run: (r) => installStatusAction(d.id, to, r) });
+                    else run(() => installStatusAction(d.id, to, null), `Now ${stageLabel(to)}`);
+                  }}>
+                  {officeStatusOptions(d.stage).filter((s) => s !== 'closed').map((s) => <option key={s} value={s}>{stageLabel(s)}</option>)}
+                </select>
+              </label>
               <div>
                 <p className="text-micro font-semibold uppercase text-muted-foreground">Technicians</p>
                 <div className="mt-1 max-h-40 space-y-1 overflow-y-auto thin-scroll">
@@ -225,7 +237,7 @@ export function InstallationView({ data: d, files, canEdit, canBill, parts }: {
           <Panel title="Visits & parts">
             <div className="grid gap-2">
               <Button variant="soft" icon="calendar" iconTone="brand" disabled={locked} onClick={() => setVisit(true)}>Schedule a visit</Button>
-              {!locked && !atWorkDone && <Button variant="soft" icon="check-circle" iconTone="success" onClick={() => setWorkDone(true)}>Mark work done</Button>}
+              {!locked && canMarkDone && <Button variant="soft" icon="check-circle" iconTone="success" onClick={() => setWorkDone(true)}>Mark work done</Button>}
               <p className="text-micro text-muted-foreground">Material goes out on a parts challan - raise it in the Parts card.</p>
             </div>
           </Panel>

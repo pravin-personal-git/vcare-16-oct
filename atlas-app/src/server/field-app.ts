@@ -3,7 +3,7 @@ import { db } from './db';
 import { scopeWhere, type StoreScope } from './store-scope';
 import { applyMovements } from './stock';
 import { LIST_MAX_ROWS } from '@/lib/list-limits';
-import { INSTALL_STAGES, stageLabel } from '@/lib/installation-stages';
+import { INSTALL_STAGES, normaliseStage, stageLabel } from '@/lib/installation-stages';
 import { settleOrderUnit } from './serial-links';
 
 /**
@@ -83,7 +83,7 @@ export async function technicianInstallations(
     status: c.status,
     // The working stage the website shows (G2, 11 Oct 2026). Added, never
     // replacing `status` - older app versions read status.
-    stage: c.stage,
+    stage: normaliseStage(c.stage),
     stageLabel: stageLabel(c.stage),
     dispatchedAt: c.dispatchedAt,
     orderNo: c.salesOrder?.orderNo ?? null,
@@ -138,7 +138,7 @@ export async function technicianInstallation(scope: StoreScope, challanId: strin
     // G2 (11 Oct 2026): the website's working stage, and the one a person can
     // move it to from the phone. Handover and approval are not offered - they
     // record who received it and start the warranty (website).
-    stage: c.stage,
+    stage: normaliseStage(c.stage),
     stageLabel: stageLabel(c.stage),
     nextStage: phoneNextStage(c.stage, c.status),
     nextStageLabel: phoneNextStage(c.stage, c.status) ? stageLabel(phoneNextStage(c.stage, c.status)!) : null,

@@ -4710,11 +4710,11 @@ model InstallationChallan {
   siteId       String?
   site         PartySite? @relation(fields: [siteId], references: [id], onDelete: SetNull)
 
-  /// The working stage, moved by what happens (27 Oct 2026): raised |
-  /// technician | visit | fitting | work_done | billed - see
-  /// lib/installation-stages `deriveStage`. `status` stays what the phone
-  /// reads (pending -> work_done -> approved | rejected); billing closes it.
-  stage         String    @default("raised")
+  /// THE JOB STATUS, a complaint's (30 Oct 2026, Vcare): a lib/job-flow code
+  /// (received ... resolved, closed, cancelled), moved by the same rulebook -
+  /// see lib/installation-stages `autoStatus`. `status` stays what older
+  /// phones read (pending -> work_done -> approved | rejected); billing closes it.
+  stage         String    @default("received")
   priority      String    @default("normal")
   /// Site survey checklist + estimated cable, filled on the first visit.
   surveyJson    Json?
@@ -4736,6 +4736,8 @@ model InstallationChallan {
   /// Material challans for cable, clamps and the like that are not on the
   /// order (22 Oct 2026, R3) - the complaint's challan engine, raised here.
   jobChallans JobChallan[]
+  /// The customer's sign-off codes (30 Oct 2026), as a complaint's.
+  otps        JobOtp[]
 
   /// BILLED OR NOT. Added 2 Oct 2026, mirroring `SalesOrder.isInvoiced`.
   ///
@@ -11764,8 +11766,11 @@ model JobEstimate {
 model JobOtp {
   id          String    @id @default(cuid())
   storeId     String
-  complaintId String
-  complaint   Complaint @relation(fields: [complaintId], references: [id], onDelete: Cascade)
+  /// One of the two: a complaint's code, or an installation's (30 Oct 2026).
+  complaintId String?
+  complaint   Complaint? @relation(fields: [complaintId], references: [id], onDelete: Cascade)
+  installationChallanId String?
+  installationChallan   InstallationChallan? @relation(fields: [installationChallanId], references: [id], onDelete: Cascade)
   code        String
   expiresAt   DateTime
   attempts    Int       @default(0)
@@ -11773,6 +11778,7 @@ model JobOtp {
   createdAt   DateTime  @default(now())
 
   @@index([complaintId, createdAt])
+  @@index([installationChallanId, createdAt])
 }
 
 /// A technician step sent from the phone's offline queue (workflow spec §4.10):

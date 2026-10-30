@@ -1,4 +1,6 @@
 import 'server-only';
+import { normaliseStage } from '@/lib/installation-stages';
+import type { JobStatus } from '@/lib/job-flow';
 import { db } from './db';
 import { createReceipt, type ReceiptMethod } from './receipts';
 import { scopeWhere, scopeForWrite, userInScope, type StoreScope } from './store-scope';
@@ -68,6 +70,9 @@ export interface InstallationChallanRow {
   challanNo: string;
   legacyRef: string | null;
   status: string;
+  /** The job status, a complaint's (30 Oct 2026). */
+  stage: JobStatus;
+  priority: string;
   physicalChallanNo: string | null;
   technicianRemark: string | null;
   note: string | null;
@@ -114,6 +119,8 @@ export async function listInstallationChallans(
     challanNo: r.challanNo,
     legacyRef: r.legacyRef,
     status: r.status,
+    stage: normaliseStage(r.stage),
+    priority: r.priority,
     physicalChallanNo: r.physicalChallanNo,
     technicianRemark: r.technicianRemark,
     note: r.note,
@@ -164,6 +171,8 @@ export async function getInstallationChallanDetail(
     challanNo: c.challanNo,
     legacyRef: c.legacyRef,
     status: c.status,
+    stage: normaliseStage(c.stage),
+    priority: c.priority,
     physicalChallanNo: c.physicalChallanNo,
     technicianRemark: c.technicianRemark,
     note: c.note,
@@ -413,7 +422,7 @@ export async function createInstallationChallan(
         siteLat: place.siteLat ?? (pinned ? input.siteLat : null),
         siteLng: place.siteLng ?? (pinned ? input.siteLng : null),
         status: 'pending',
-        stage: input.assigneeIds.length ? 'technician' : 'raised',
+        stage: input.assigneeIds.length ? 'assigned' : 'received',
         physicalChallanNo: input.physicalChallanNo?.trim() || null,
         technicianRemark: input.technicianRemark?.trim() || null,
         note: input.note?.trim() || null,
