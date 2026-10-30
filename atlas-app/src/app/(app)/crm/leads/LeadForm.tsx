@@ -20,7 +20,7 @@ function Submit() {
   return (
     <button type="submit" disabled={pending}
       className="inline-flex h-9 items-center gap-2 rounded bg-brand px-4 text-sm font-semibold text-brand-fg shadow-card transition hover:bg-brand-hover disabled:opacity-50">
-      {pending ? 'Saving…' : '+ Add Lead'}
+      {pending ? 'Saving…' : '+ Add enquiry'}
     </button>
   );
 }
@@ -151,14 +151,14 @@ export function LeadForm({ stages, dealStages, sources, users, initialCard = nul
   };
 
   return (
-    <DialogFrame label="New lead" onClose={onClose} className="fixed inset-0 z-[200] grid place-items-center bg-navy/40 p-2 sm:p-4">
+    <DialogFrame label="New enquiry" onClose={onClose} className="fixed inset-0 z-[200] grid place-items-center bg-navy/40 p-2 sm:p-4">
       <div className="thin-scroll max-h-[94vh] w-full max-w-3xl animate-slide-up overflow-y-auto rounded-lg bg-card shadow-overlay">
         <div className="sticky top-0 z-10 flex items-center gap-3 border-b border-border bg-card px-5 py-3.5">
           <span className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-brand/10 text-on-tint-brand">
             <Icon name="user-plus" className="h-5 w-5" />
           </span>
           <div className="min-w-0">
-            <h2 className="truncate text-base font-bold leading-tight">Add New Lead</h2>
+            <h2 className="truncate text-base font-bold leading-tight">Add new enquiry</h2>
             <p className="truncate text-xs text-muted-foreground">Fields marked * are mandatory</p>
           </div>
           <button type="button" onClick={onClose} aria-label="Close"
@@ -187,7 +187,7 @@ export function LeadForm({ stages, dealStages, sources, users, initialCard = nul
               <Field label="Mobile" name="mobile" required prefix="+91" maxLength={10} placeholder="10-digit number" />
               {show('altMobile') && <Field label="Alt Mobile" name="altMobile" prefix="+91" maxLength={10} required={req('altMobile')} />}
               {show('email') && <Field label="Email" name="email" type="email" required={req('email')} />}
-              {show('refCode') && <Field label="Lead Code / Reference" name="refCode" required={req('refCode')} />}
+              {show('refCode') && <Field label="Enquiry number / reference" name="refCode" required={req('refCode')} />}
               {show('addressLine1') && <div className="sm:col-span-2"><Field label="Address Line 1" name="addressLine1" placeholder="Street / Building" required={req('addressLine1')} /></div>}
               <div className="sm:col-span-2"><Field label="Address Line 2" name="addressLine2" placeholder="Area / Locality" /></div>
               <Field label="State" name="state" />
@@ -220,7 +220,7 @@ export function LeadForm({ stages, dealStages, sources, users, initialCard = nul
               <div className="sm:col-span-2">
                 <label className="block">
                   <span className="field-label">Requirement</span>
-                  <textarea name="requirement" rows={2} placeholder="Describe what the lead is looking for…"
+                  <textarea name="requirement" rows={2} placeholder="Describe what the customer is looking for…"
                     className="field-input" />
                 </label>
               </div>

@@ -7,6 +7,8 @@ import { GlobalSearch } from './GlobalSearch';
 import { HeaderRail } from './HeaderRail';
 import { PresenceButton, type PresenceSnapshot } from './PresenceButton';
 import { AskAiButton } from './AskAiButton';
+import { HelpChat } from '@/components/help/HelpChat';
+import { levelFor } from '@/lib/levels';
 import { HeaderScanButton } from '@/components/scan/HeaderScanButton';
 import { MobileMenuButton } from './MobileNav';
 import { HistoryBack } from './HistoryBack';
@@ -130,6 +132,8 @@ export async function Header({ ctx }: { ctx: AppContext }) {
         the language switcher takes Ask AI's place. The laptop layout keeps
         both, with the language switcher further along the bar.
       */}
+      {/* Madad - the help chat (30 Oct 2026): on every width, it is the first place to ask. */}
+      <HelpChat isAdmin={levelFor(ctx.permissions) === 'admin'} />
       <div className="hidden lg:block">
         <AskAiButton />
       </div>
