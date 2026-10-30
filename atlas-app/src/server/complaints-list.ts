@@ -46,7 +46,13 @@ export async function complaintsList(ctx: AppContext, sp: Sp) {
     { ...sp, person: sp.person ?? sp.tech },
     { defaultRange: 'all', meId: ctx.user.id },
   );
-  const card: ComplaintCard = (COMPLAINT_CARDS as readonly string[]).includes(sp.card ?? '') ? (sp.card as ComplaintCard) : 'open';
+  const query = parseGridQuery(sp);
+  // A search looks across every status (30 Oct 2026): staff search a customer to
+  // FIND which stage the job is in, so the default "Open" card must not hide it.
+  // A card picked on purpose (?card=) still narrows the search.
+  const card: ComplaintCard | null = (COMPLAINT_CARDS as readonly string[]).includes(sp.card ?? '')
+    ? (sp.card as ComplaintCard)
+    : query.q ? null : 'open';
 
   /**
    * `?cat=` - the equipment's category (3 Oct 2026).
@@ -67,10 +73,11 @@ export async function complaintsList(ctx: AppContext, sp: Sp) {
     inRange(c.createdAt, filters.range)
     && (!filters.personId || c.assignedTechnicianId === filters.personId)
     && (!categoryId || c.productCategoryId === categoryId));
-  const counts = Object.fromEntries(COMPLAINT_CARDS.map((k) => [k, inScope.filter((c) => matchesCard(c, k)).length])) as Record<ComplaintCard, number>;
+  // While searching, the cards count the matches, so they show which stage each one is in.
+  const searched = query.q ? searchAndSort(inScope, query, COMPLAINT_GRID) : inScope;
+  const counts = Object.fromEntries(COMPLAINT_CARDS.map((k) => [k, searched.filter((c) => matchesCard(c, k)).length])) as Record<ComplaintCard, number>;
 
-  const query = parseGridQuery(sp);
-  const rows = searchAndSort(inScope.filter((c) => matchesCard(c, card)), query, COMPLAINT_GRID);
+  const rows = card ? searchAndSort(inScope.filter((c) => matchesCard(c, card)), query, COMPLAINT_GRID) : searched;
   /**
    * The categories that actually appear, so the dropdown never offers one with
    * nothing behind it. Taken from `all` rather than `inScope`: narrowing to a

@@ -49,7 +49,8 @@ export function ComplaintsClient({
   rows: Complaint[];
   paging: ServerPaging;
   counts: Record<string, number>;
-  card: string;
+  /** null while a search looks across every status. */
+  card: string | null;
   /** The date range in force, in words ("FY 2026-27", "All time"). */
   rangeLabel: string;
   technicians: Technician[];
@@ -203,7 +204,7 @@ export function ComplaintsClient({
         ) : undefined}
       />
 
-      <KpiStrip cards={cards} activeKey={card} onSelect={(k) => list.set({ card: k && k !== 'open' ? k : null })} columns={8} />
+      <KpiStrip cards={cards} activeKey={card} onSelect={(k) => list.set({ card: k && (k !== 'open' || list.get('q')) ? k : null })} columns={8} />
 
       {assignError && (
         <p role="alert" className="mb-3 rounded-lg border border-danger/30 bg-danger/5 px-3 py-2 text-sm text-on-tint-danger">
