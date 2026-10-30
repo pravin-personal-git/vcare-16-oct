@@ -55,7 +55,10 @@ export function HelpChat({ isAdmin }: { isAdmin: boolean }) {
     if (!open) return;
     if (!lib) start(async () => setLib((await helpLibraryAction()).articles));
     const t = setTimeout(() => input.current?.focus(), 50);
-    const esc = (e: KeyboardEvent) => { if (e.key === 'Escape') (zoom ? setZoom(null) : setOpen(false)); };
+    const esc = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      if (zoom) setZoom(null); else setOpen(false);
+    };
     window.addEventListener('keydown', esc);
     return () => { clearTimeout(t); window.removeEventListener('keydown', esc); };
   }, [open, lib, zoom]);
@@ -219,7 +222,7 @@ function Answer({ a, byId, onAsk, onZoom, onOpen }: {
               {s.shot && (
                 <button type="button" onClick={() => onZoom(`/help/${s.shot}.jpg`)} className="mt-2 block w-full overflow-hidden rounded-xl ring-1 ring-inset ring-border transition hover:ring-brand" aria-label="Screenshot bada karo">
                   {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={`/help/${s.shot}.jpg`} alt="" loading="lazy" className="block max-h-32 w-full object-cover object-top" onError={(e) => { (e.currentTarget.parentElement as HTMLElement).style.display = 'none'; }} />
+                  <img src={`/help/${s.shot}.jpg`} alt="" loading="lazy" className="block max-h-32 w-full object-cover object-top" />
                 </button>
               )}
             </div>

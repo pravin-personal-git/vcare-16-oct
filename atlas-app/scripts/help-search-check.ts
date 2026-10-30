@@ -1,6 +1,7 @@
 // Self-check for the help chat's search: real questions, as staff type them, and the guide each must land on.
 //   npx tsx --conditions=react-server scripts/help-search-check.ts
 import assert from 'node:assert/strict';
+import { existsSync } from 'node:fs';
 import { search, CONFIDENT } from '../src/lib/help/search';
 import { HELP } from '../src/server/help-content';
 
@@ -46,4 +47,6 @@ for (const [q, want] of CASES) {
 console.log(`\n${ok}/${CASES.length} land on the right guide`);
 assert.equal(new Set(HELP.map((a) => a.id)).size, HELP.length, 'guide ids must be unique');
 for (const a of HELP) for (const r of a.related ?? []) assert.ok(HELP.some((b) => b.id === r), `${a.id} relates to missing ${r}`);
+// Every screenshot a guide names is in public/help (the chat shows it without checking).
+for (const a of HELP) for (const st of a.steps) if (st.shot) assert.ok(existsSync(`public/help/${st.shot}.jpg`), `${a.id}: public/help/${st.shot}.jpg missing`);
 assert.equal(ok, CASES.length, 'every question must land on its guide');
