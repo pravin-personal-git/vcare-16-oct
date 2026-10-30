@@ -286,17 +286,17 @@ function WaitingList({ items, picked, setPicked, chosen, decide, busy, setReject
               {needNote.length > 0 && <span className="text-on-tint-warning">{needNote.length} need a note of your call - approve {needNote.length === 1 ? 'it' : 'them'} one by one.</span>}
             </div>
           )}
-          {/* One block per category, in the strip's order; the chosen sort orders rows inside each. */}
-          {DESK_CATEGORIES.map((c) => ({ c, rows: items.filter((i) => categoryOf(i.type).key === c.key) })).filter((g) => g.rows.length).map(({ c, rows }) => (
-          <section key={c.key}>
+          {/* One list in the chosen sort (30 Oct 2026: category blocks put the newest
+              request under older ones); the strip above filters by category. */}
+          <section>
           <div className="flex items-center gap-2 border-b border-border bg-muted/30 px-4 py-1.5">
-            <Badge tone={c.tone} icon={c.icon}>{c.label}</Badge>
-            <span className="text-xs text-muted-foreground">{rows.length} waiting</span>
+            <span className="text-xs text-muted-foreground">{items.length} waiting</span>
             <button type="button" className="ms-auto text-xs font-medium text-brand hover:underline"
-              onClick={() => setPicked((p) => [...new Set([...p, ...rows.map(key)])])}>Select all {rows.length}</button>
+              onClick={() => setPicked((p) => [...new Set([...p, ...items.map(key)])])}>Select all {items.length}</button>
           </div>
           <ul>
-            {rows.map((i) => {
+            {items.map((i) => {
+              const c = categoryOf(i.type);
               const age = ageTone(i.since);
               return (
               <li key={key(i)} className={`flex flex-wrap items-start gap-3 border-b border-border px-4 py-3 last:border-b-0 ${age ? AGE_EDGE[age] : ''}`}>
@@ -330,7 +330,6 @@ function WaitingList({ items, picked, setPicked, chosen, decide, busy, setReject
             })}
           </ul>
           </section>
-          ))}
         </>
   );
 }
