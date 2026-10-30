@@ -14,6 +14,9 @@ import type { InboxItem } from '@/server/approvals';
 import { deskAction, raiseDeskAction, reminderTargetsAction, teamFollowUpAction } from '@/app/actions/inbox';
 import { MyRequestsTab, NewRequestModal, TeamTab, newestBy, oldestBy, uniq, type Desk } from './DeskParts';
 import { notificationsAction } from '@/app/actions/inbox';
+
+// Module-level so React calls it once per mount (a new message), not on every render.
+const scrollIntoView = (el: HTMLElement | null) => { el?.scrollIntoView({ behavior: 'smooth', block: 'center' }); };
 import type { DateRange } from '@/lib/date-ranges';
 import { KpiStrip } from '@/components/ui/KpiStrip';
 import { useListParams } from '@/components/ui/useListParams';
@@ -105,7 +108,7 @@ export function MyRemindersClient({ initialTab, isOwner, singleStore }: { initia
       {msg && (
         // Scrolled to when it appears: an Approve far down the list used to fail
         // with this banner off screen, and looked like nothing happened (30 Oct 2026).
-        <div ref={(el) => el?.scrollIntoView({ behavior: 'smooth', block: 'center' })} key={msg.text}>
+        <div ref={scrollIntoView} key={msg.text}>
           <Card className={`mb-3 p-3 text-sm ${msg.tone === 'err' ? 'border-danger/40 bg-danger/5 text-danger' : 'border-success/40 bg-success/5 text-success'}`}>
             <span role={msg.tone === 'err' ? 'alert' : 'status'}>{msg.text}</span>
           </Card>
