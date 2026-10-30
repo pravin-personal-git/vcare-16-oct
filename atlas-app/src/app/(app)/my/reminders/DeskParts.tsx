@@ -1,7 +1,9 @@
 'use client';
 
 import Link from 'next/link';
-import { Fragment, useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { KpiStrip } from '@/components/ui/KpiStrip';
+import { useListParams } from '@/components/ui/useListParams';
 import { Button } from '@/components/ui/Button';
 import { Icon, type IconName } from '@/components/ui/Icon';
 import { Modal } from '@/components/ui/Modal';
@@ -10,6 +12,7 @@ import { ListFilter } from '@/components/ui/ListFilter';
 import type { deskAction, teamFollowUpAction } from '@/app/actions/inbox';
 import type { MyRequestItem } from '@/server/approvals';
 import type { DeskKind, DeskRequestInput } from '@/server/my-desk';
+import { NOTE_KINDS, ageTone, categoryOf } from '@/lib/desk-categories';
 
 /**
  * My Desk parts (27 Sep 2026, streamline roadmap S2):
@@ -335,114 +338,168 @@ export function NewRequestModal({ options, singleStore, busy, onClose, onSend }:
 
 // ------------------------------------------------------------------ Team (owner)
 
-export function TeamTab({ rows }: { rows: Team | null }) {
+/**
+ * TEAM FOLLOW-UP, REDONE (30 Oct 2026). It was one table of seven numbers per
+ * person; the owner had to read every row to find who to chase. Now each
+ * person falls in one state, worst first, and the strip on top counts them:
+ *  - Blocking others: approvals sit with them, so someone else is waiting.
+ *  - Behind: reminders past due, or notifications unread for over a week.
+ *  - Keeping up: some unread, all recent.
+ *  - All clear.
+ * Each card says what they are behind on (unread by kind, approvals by
+ * category, oldest first) and Remind sends them a reminder that rings on
+ * their phone (decision 12: the owner may remind anybody).
+ */
+type TeamState = 'blocking' | 'behind' | 'keeping' | 'clear';
+const STATES: { key: TeamState; label: string; icon: IconName; tone: 'danger' | 'warning' | 'info' | 'success' }[] = [
+  { key: 'blocking', label: 'Blocking others', icon: 'alert-triangle', tone: 'danger' },
+  { key: 'behind', label: 'Behind', icon: 'clock', tone: 'warning' },
+  { key: 'keeping', label: 'Keeping up', icon: 'eye', tone: 'info' },
+  { key: 'clear', label: 'All clear', icon: 'check-circle', tone: 'success' },
+];
+const WEEK = 7 * 86_400_000;
+const stateOf = (r: TeamRow): TeamState =>
+  r.approvalsWaiting ? 'blocking'
+    : r.overdueReminders || (r.oldestUnreadAt && Date.now() - Date.parse(r.oldestUnreadAt) > WEEK) ? 'behind'
+      : r.unread ? 'keeping' : 'clear';
+const stuckFor = (iso: string | null) => (iso ? ageTone(iso) : null);
+const AVATAR = { danger: 'bg-danger/10 text-on-tint-danger', warning: 'bg-warning/15 text-on-tint-warning', info: 'bg-info/10 text-on-tint-info', success: 'bg-success/[0.12] text-on-tint-success' };
+const initials = (n: string) => n.split(/\s+/).slice(0, 2).map((w) => w[0]?.toUpperCase()).join('');
+/** What Remind fills in, so the owner only presses Save. */
+const remindText = (r: TeamRow) =>
+  r.approvalsWaiting ? `Decide the ${r.approvalsWaiting} approval${r.approvalsWaiting > 1 ? 's' : ''} waiting on you in My Desk`
+    : r.overdueReminders ? `Clear your ${r.overdueReminders} overdue reminder${r.overdueReminders > 1 ? 's' : ''}`
+      : `Read your ${r.unread} notification${r.unread > 1 ? 's' : ''} on Vcare`;
+
+export function TeamTab({ rows, onRemind }: { rows: Team | null; onRemind?: (userId: string, title: string) => void }) {
   const [open, setOpen] = useState<string | null>(null);
+  const list = useListParams();
   if (!rows) return <p className="text-sm text-muted-foreground">Loading…</p>;
-  const behind = rows.filter((r) => r.unread || r.overdueReminders || r.approvalsWaiting);
-  // One label per person for the chips - the most pressing thing they owe.
-  const flag = (r: TeamRow) =>
-    r.approvalsWaiting ? 'Approvals waiting' : r.overdueReminders ? 'Overdue reminders' : r.unread ? 'Unread' : 'Up to date';
-  const flags = uniq(rows.map(flag));
+  const counts = STATES.map((s) => ({ ...s, people: rows.filter((r) => stateOf(r) === s.key) }));
+  const sub = (s: (typeof counts)[number]) => {
+    if (!s.people.length) return 'nobody';
+    if (s.key === 'blocking') { const n = s.people.reduce((t, r) => t + r.approvalsWaiting, 0); return `${n} approval${n === 1 ? '' : 's'} stuck`; }
+    if (s.key === 'behind') return `${s.people.reduce((n, r) => n + r.unread, 0)} unread`;
+    return s.key === 'keeping' ? 'unread, all this week' : 'nothing pending';
+  };
+
   return (
     <SectionCard title="Team follow-up" icon="users" bodyClassName="p-0">
-      <p className="border-b border-border bg-muted/30 px-4 py-2 text-xs text-muted-foreground">
-        Who has not read their notifications, has reminders past due, or has approvals sitting with them. Busiest first.
-        Click a person with approvals waiting to see which ones.
-        {behind.length === 0 && ' Everyone is up to date.'}
-      </p>
+      <div className="border-b border-border px-4 pt-3">
+        <KpiStrip columns={4} activeKey={list.get('tm_c')} onSelect={(k) => list.set({ tm_c: k })}
+          cards={counts.map((s) => ({ key: s.key, label: s.label, count: s.people.length, icon: s.icon, tone: s.tone, subLabel: sub(s) }))} />
+      </div>
       <ListFilter
         rows={rows} paramKey="tm" noun="people"
-        placeholder="Person…"
-        searchOn={(r) => [r.name, ...r.approvals.map((a) => a.title)]}
-        chips={flags.map((f) => ({ value: f, label: f, count: rows.filter((r) => flag(r) === f).length }))}
-        chipOf={flag} chipLabel="Show"
+        placeholder="Person, role, an approval…"
+        searchOn={(r) => [r.name, r.role, ...r.approvals.map((a) => a.title)]}
+        chipOf={stateOf}
         dates={[
           { key: 'seen', label: 'Last active', of: (r) => r.lastSeenAt },
           { key: 'approval', label: 'Oldest approval', of: (r) => r.oldestApprovalAt },
           { key: 'unread', label: 'Oldest unread', of: (r) => r.oldestUnreadAt },
         ]}
         sorts={[
-          { key: 'new', label: 'Newest first (recently active)', compare: newestBy((r) => r.lastSeenAt) },
-          { key: 'old', label: 'Oldest first (inactive longest)', compare: oldestBy((r) => r.lastSeenAt) },
-          { key: 'most', label: 'Most pending', compare: (a, b) => (b.unread + b.overdueReminders + b.approvalsWaiting) - (a.unread + a.overdueReminders + a.approvalsWaiting) },
+          { key: 'most', label: 'Most pending', compare: (a, b) => (b.unread + b.overdueReminders * 3 + b.approvalsWaiting * 5) - (a.unread + a.overdueReminders * 3 + a.approvalsWaiting * 5) },
+          { key: 'stuck', label: 'Approval stuck longest', compare: oldestBy((r) => r.oldestApprovalAt) },
+          { key: 'new', label: 'Recently active', compare: newestBy((r) => r.lastSeenAt) },
+          { key: 'old', label: 'Inactive longest', compare: oldestBy((r) => r.lastSeenAt) },
           { key: 'name', label: 'Name A to Z', compare: (a, b) => a.name.localeCompare(b.name) },
         ]}
-        selects={[{ key: 'p', label: 'Person', of: (r) => r.name, options: uniq(rows.map((r) => r.name)) }]}
+        selects={[
+          { key: 'role', label: 'Role', of: (r) => r.role ?? 'No role', options: uniq(rows.map((r) => r.role ?? 'No role')) },
+          { key: 'web', label: 'On the web', of: (r) => (!r.lastSeenAt ? 'Never' : Date.now() - Date.parse(r.lastSeenAt) > WEEK ? 'Not this week' : 'This week'), options: ['This week', 'Not this week', 'Never'] },
+        ]}
         exportAs={{ title: 'Team follow-up', columns: [
-          { header: 'Person', value: (r) => r.name }, { header: 'Unread', value: (r) => r.unread },
-          { header: 'Overdue reminders', value: (r) => r.overdueReminders }, { header: 'Approvals waiting', value: (r) => r.approvalsWaiting },
-          { header: 'Last active', value: (r) => r.lastSeenAt?.slice(0, 10) ?? '' },
+          { header: 'Person', value: (r) => r.name }, { header: 'Role', value: (r) => r.role ?? '' },
+          { header: 'State', value: (r) => STATES.find((s) => s.key === stateOf(r))!.label },
+          { header: 'Approvals waiting', value: (r) => r.approvalsWaiting }, { header: 'Oldest approval', value: (r) => r.oldestApprovalAt?.slice(0, 10) ?? '' },
+          { header: 'Unread', value: (r) => r.unread }, { header: 'Oldest unread', value: (r) => r.oldestUnreadAt?.slice(0, 10) ?? '' },
+          { header: 'Overdue reminders', value: (r) => r.overdueReminders }, { header: 'Last active', value: (r) => r.lastSeenAt?.slice(0, 10) ?? '' },
         ] }}
       >
         {(shown) => shown.length === 0
           ? <EmptyState icon="search" title="Nothing matches" hint="Widen the date range or clear a filter." />
-          : (
-      <div className="overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="border-b border-border text-micro uppercase tracking-wide text-muted-foreground">
-              <th className="px-4 py-2 text-start font-semibold">Person</th>
-              <th className="px-3 py-2 text-end font-semibold">Unread</th>
-              <th className="px-3 py-2 text-start font-semibold">Oldest unread</th>
-              <th className="px-3 py-2 text-end font-semibold">Overdue reminders</th>
-              <th className="px-3 py-2 text-end font-semibold">Approvals waiting</th>
-              <th className="px-3 py-2 text-start font-semibold">Oldest approval</th>
-              <th className="px-3 py-2 text-start font-semibold">Last active on web</th>
-            </tr>
-          </thead>
-          <tbody>
-            {shown.map((r) => {
-              const expandable = r.approvals.length > 0;
-              const isOpen = open === r.userId;
-              const toggle = () => setOpen(isOpen ? null : r.userId);
-              return (
-                <Fragment key={r.userId}>
-                  <tr className={`border-b border-border last:border-0 ${expandable ? 'cursor-pointer hover:bg-muted/40' : ''}`}
-                    onClick={expandable ? toggle : undefined}>
-                    <td className="px-4 py-2 font-medium">
-                      {expandable ? (
-                        <button type="button" aria-expanded={isOpen} className="flex items-center gap-1.5 text-start"
-                          onClick={(e) => { e.stopPropagation(); toggle(); }}>
-                          <Icon name={isOpen ? 'chevron-down' : 'chevron-right'} className="h-3.5 w-3.5 text-muted-foreground" />
-                          {r.name}
-                        </button>
-                      ) : r.name}
-                    </td>
-                    <td className={`px-3 py-2 text-end tabular-nums ${r.unread ? 'font-semibold text-warning' : 'text-muted-foreground'}`}>{r.unread}</td>
-                    <td className="px-3 py-2 text-muted-foreground">{ago(r.oldestUnreadAt)}</td>
-                    <td className={`px-3 py-2 text-end tabular-nums ${r.overdueReminders ? 'font-semibold text-danger' : 'text-muted-foreground'}`}>{r.overdueReminders}</td>
-                    <td className={`px-3 py-2 text-end tabular-nums ${r.approvalsWaiting ? 'font-semibold text-danger' : 'text-muted-foreground'}`}>{r.approvalsWaiting}</td>
-                    <td className="px-3 py-2 text-muted-foreground">{ago(r.oldestApprovalAt)}</td>
-                    <td className="px-3 py-2 text-muted-foreground">{ago(r.lastSeenAt)}</td>
-                  </tr>
-                  {isOpen && (
-                    <tr className="border-b border-border bg-muted/20">
-                      <td colSpan={7} className="px-4 py-2">
-                        <ul className="divide-y divide-border">
-                          {r.approvals.map((a) => (
-                            <li key={a.requestId} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-1.5 text-xs">
-                              <Badge tone="neutral">{a.typeLabel}</Badge>
-                              <span className="font-medium">{a.title}</span>
-                              <span className="text-muted-foreground">
-                                from {a.requesterName}
-                                {a.amountPaise ? ` · ₹${(a.amountPaise / 100).toLocaleString('en-IN')}` : ''}
-                                {` · raised ${ago(a.since)}`}
-                              </span>
-                              <Link href={a.href} className="ms-auto font-medium text-brand hover:underline">Open</Link>
-                            </li>
-                          ))}
-                        </ul>
-                      </td>
-                    </tr>
-                  )}
-                </Fragment>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
-          )}
+          // Worst state on top whatever the sort; the sort orders people inside each.
+          : STATES.map((s) => ({ s, people: shown.filter((r) => stateOf(r) === s.key) })).filter((g) => g.people.length).map(({ s, people }) => (
+            <section key={s.key}>
+              <p className="flex items-center gap-2 border-b border-border bg-muted/30 px-4 py-1.5 text-xs text-muted-foreground">
+                <Badge tone={s.tone} icon={s.icon}>{s.label}</Badge>{people.length} {people.length === 1 ? 'person' : 'people'}
+              </p>
+              <ul>{people.map((r) => (
+                <PersonCard key={r.userId} r={r} tone={s.tone} isOpen={open === r.userId}
+                  toggle={() => setOpen(open === r.userId ? null : r.userId)}
+                  onRemind={onRemind && s.key !== 'clear' ? () => onRemind(r.userId, remindText(r)) : undefined} />
+              ))}</ul>
+            </section>
+          ))}
       </ListFilter>
     </SectionCard>
+  );
+}
+
+function PersonCard({ r, tone, isOpen, toggle, onRemind }: {
+  r: TeamRow; tone: (typeof STATES)[number]['tone']; isOpen: boolean; toggle: () => void; onRemind?: () => void;
+}) {
+  const approvalAge = stuckFor(r.oldestApprovalAt);
+  const unreadAge = stuckFor(r.oldestUnreadAt);
+  const kinds = Object.entries(r.unreadByKind).sort((a, b) => b[1] - a[1]);
+  const stat = (label: string, n: number, sub: string | null, bad: 'danger' | 'warning' | null) => (
+    <div className="min-w-[7.5rem]">
+      <p className="text-micro font-semibold uppercase tracking-wide text-muted-foreground">{label}</p>
+      <p className={`font-mono text-lg font-semibold tabular-nums ${!n ? 'text-muted-foreground' : bad === 'danger' ? 'text-danger' : bad === 'warning' ? 'text-on-tint-warning' : ''}`}>{n}</p>
+      {n > 0 && sub && <p className="text-xs text-muted-foreground">{sub}</p>}
+    </div>
+  );
+  return (
+    <li className="border-b border-border last:border-b-0">
+      <div className="flex flex-wrap items-start gap-x-6 gap-y-3 px-4 py-3">
+        <div className="flex min-w-[13rem] flex-1 items-start gap-3">
+          <span className={`grid h-9 w-9 shrink-0 place-items-center rounded-full text-xs font-bold ${AVATAR[tone]}`}>{initials(r.name)}</span>
+          <div className="min-w-0">
+            <p className="font-medium">{r.name}</p>
+            <p className="text-xs text-muted-foreground">{r.role ?? 'No role'} · {r.lastSeenAt ? `on the web ${ago(r.lastSeenAt)}` : 'never on the web'}</p>
+            {kinds.length > 0 && (
+              <p className="mt-1.5 flex flex-wrap gap-1">
+                {kinds.slice(0, 4).map(([k, n]) => (
+                  <Badge key={k} tone={NOTE_KINDS[k]?.tone ?? 'neutral'} icon={NOTE_KINDS[k]?.icon} title={`${n} unread: ${NOTE_KINDS[k]?.label ?? k}`}>
+                    {n} {NOTE_KINDS[k]?.label ?? k}
+                  </Badge>
+                ))}
+              </p>
+            )}
+          </div>
+        </div>
+        {stat('Approvals with them', r.approvalsWaiting, r.oldestApprovalAt && `oldest ${ago(r.oldestApprovalAt)}`, approvalAge ?? 'warning')}
+        {stat('Unread', r.unread, r.oldestUnreadAt && `oldest ${ago(r.oldestUnreadAt)}`, unreadAge)}
+        {stat('Reminders overdue', r.overdueReminders, null, 'warning')}
+        <div className="flex shrink-0 items-center gap-1.5 self-center">
+          {r.approvals.length > 0 && (
+            <Button size="sm" icon={isOpen ? 'chevron-up' : 'chevron-down'} aria-expanded={isOpen} onClick={toggle}>
+              {isOpen ? 'Hide' : 'See'} approvals
+            </Button>
+          )}
+          {onRemind && <Button size="sm" variant="primary" icon="bell" onClick={onRemind}>Remind</Button>}
+        </div>
+      </div>
+      {isOpen && (
+        <ul className="mx-4 mb-3 divide-y divide-border rounded-lg border border-border bg-muted/20">
+          {r.approvals.map((a) => {
+            const c = categoryOf(a.type);
+            const age = ageTone(a.since);
+            return (
+              <li key={a.requestId} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2 text-xs">
+                <Badge tone={c.tone} icon={c.icon}>{a.typeLabel}</Badge>
+                <span className="font-medium">{a.title}</span>
+                <span className="text-muted-foreground">
+                  from {a.requesterName}{a.amountPaise ? ` · ₹${(a.amountPaise / 100).toLocaleString('en-IN')}` : ''} · <span className={age === 'danger' ? 'font-semibold text-danger' : age === 'warning' ? 'font-semibold text-on-tint-warning' : ''}>raised {ago(a.since)}</span>
+                </span>
+                <Link href={a.href} className="ms-auto font-medium text-brand hover:underline">Open</Link>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </li>
   );
 }

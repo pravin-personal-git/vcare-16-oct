@@ -226,7 +226,11 @@ export async function raiseDeskRequest(scope: StoreScope, userId: string, input:
 export interface TeamFollowUpRow {
   userId: string;
   name: string;
+  /** Their role here, so the owner knows whose desk it is (30 Oct 2026). */
+  role: string | null;
   unread: number;
+  /** Unread split by notification kind - what they are ignoring, not just how much. */
+  unreadByKind: Record<string, number>;
   oldestUnreadAt: string | null;
   overdueReminders: number;
   approvalsWaiting: number;
@@ -243,6 +247,7 @@ export interface TeamFollowUpRow {
 export interface TeamApproval {
   requestId: string;
   title: string;
+  type: string;
   typeLabel: string;
   requesterName: string;
   amountPaise: number | null;
@@ -263,9 +268,10 @@ export async function teamFollowUp(scope: StoreScope): Promise<TeamFollowUpRow[]
   const [people, unread, overdue, open, sessions] = await Promise.all([
     db.user.findMany({
       where: { isActive: true, storeRoles: { some: { storeId: { in: storeIds } } } },
-      select: { id: true, fullName: true }, orderBy: { fullName: 'asc' }, take: FEED_MAX_ROWS,
+      select: { id: true, fullName: true, storeRoles: { where: { storeId: { in: storeIds } }, select: { role: { select: { name: true } } }, take: 1 } },
+      orderBy: { fullName: 'asc' }, take: FEED_MAX_ROWS,
     }),
-    db.notification.groupBy({ by: ['userId'], where: { ...w, readAt: null }, _count: { _all: true }, _min: { createdAt: true } }),
+    db.notification.groupBy({ by: ['userId', 'kind'], where: { ...w, readAt: null }, _count: { _all: true }, _min: { createdAt: true } }),
     db.personalReminder.groupBy({
       by: ['userId'], where: { ...w, doneAt: null, OR: [{ snoozedUntil: null, dueAt: { lt: now } }, { snoozedUntil: { lt: now } }] }, _count: { _all: true },
     }),
@@ -289,7 +295,7 @@ export async function teamFollowUp(scope: StoreScope): Promise<TeamFollowUpRow[]
   for (const r of open) {
     const t = requestType(r.entityType);
     const item: TeamApproval = {
-      requestId: r.id, title: r.title ?? t?.label ?? 'Request', typeLabel: t?.label ?? r.entityType,
+      requestId: r.id, title: r.title ?? t?.label ?? 'Request', type: r.entityType, typeLabel: t?.label ?? r.entityType,
       requesterName: nameOf.get(r.requestedBy) ?? 'Someone', amountPaise: r.amountPaise,
       since: r.createdAt.toISOString(), href: r.href ?? t?.href(r.entityId) ?? '/my/reminders',
     };
@@ -298,13 +304,22 @@ export async function teamFollowUp(scope: StoreScope): Promise<TeamFollowUpRow[]
       if (list) list.push(item); else waiting.set(id, [item]);
     }
   }
-  const u = new Map(unread.map((r) => [r.userId, r]));
+  // One row per person and kind: add up the total and keep the oldest.
+  const u = new Map<string, { total: number; oldest: Date | null; byKind: Record<string, number> }>();
+  for (const r of unread) {
+    const cur = u.get(r.userId) ?? { total: 0, oldest: null, byKind: {} };
+    cur.total += r._count._all;
+    cur.byKind[r.kind] = r._count._all;
+    if (r._min.createdAt && (!cur.oldest || r._min.createdAt < cur.oldest)) cur.oldest = r._min.createdAt;
+    u.set(r.userId, cur);
+  }
   const o = new Map(overdue.map((r) => [r.userId, r._count._all]));
   const s = new Map(sessions.map((r) => [r.userId, r._max.lastActiveAt]));
   return people.map((p) => ({
-    userId: p.id, name: p.fullName,
-    unread: u.get(p.id)?._count._all ?? 0,
-    oldestUnreadAt: u.get(p.id)?._min.createdAt?.toISOString() ?? null,
+    userId: p.id, name: p.fullName, role: p.storeRoles[0]?.role.name ?? null,
+    unread: u.get(p.id)?.total ?? 0,
+    unreadByKind: u.get(p.id)?.byKind ?? {},
+    oldestUnreadAt: u.get(p.id)?.oldest?.toISOString() ?? null,
     overdueReminders: o.get(p.id) ?? 0,
     approvalsWaiting: waiting.get(p.id)?.length ?? 0,
     oldestApprovalAt: waiting.get(p.id)?.[0]?.since ?? null,
