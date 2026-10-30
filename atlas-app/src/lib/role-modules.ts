@@ -37,7 +37,7 @@ export const ROLE_MODULES: RoleModule[] = [
   // `leads.delete` unlocked nothing and the tick lied (found 10 Oct 2026 by
   // the dead-permission check in lib/__tests__/action-registry.test.ts). The
   // key stays in the catalogue for databases that already hold it.
-  { key: 'leads', label: 'Leads', group: 'Sales', hint: 'Enquiries and follow-ups', view: ['leads.view'], edit: ['leads.create', 'leads.edit'] },
+  { key: 'leads', label: 'Enquiries', group: 'Sales', hint: 'Enquiries and follow-ups', view: ['leads.view'], edit: ['leads.create', 'leads.edit'] },
   { key: 'customers', label: 'Customers', group: 'Sales', hint: 'Customer master and accounts', view: ['customers.view'], edit: ['customers.create', 'customers.edit'] },
   { key: 'quotation', label: 'Quotations', group: 'Sales', hint: 'Quotes to customers', view: ['quotation.view'], edit: ['quotation.create', 'quotation.edit'], approve: ['quotation.approve'], delete: ['quotation.delete'] },
   { key: 'orders', label: 'Sales orders', group: 'Sales', hint: 'Orders and delivery', view: ['orders.view'], edit: ['orders.create', 'orders.edit'], approve: ['orders.approve'] },
@@ -182,3 +182,22 @@ export function splitGrantsFor(keys: ReadonlySet<string>): string[] {
     .filter((g) => (g.ifAll ?? []).every((anyOf) => anyOf.some((k) => keys.has(k))))
     .map((g) => g.key);
 }
+
+/**
+ * One person's own level on one module (30 Oct 2026, Settings > Operations &
+ * approvals): the module's View / Edit / Approve keys become exactly what the
+ * level grants. Delete the roles gave is kept only at Edit or above ("can
+ * only look" must not keep Delete); their extra switches only while not None.
+ */
+export function applyPersonalLevel(keys: ReadonlySet<string>, m: RoleModule, level: ModuleLevel): Set<string> {
+  const had = moduleState(m, keys);
+  const canChange = level === 'edit' || level === 'approve';
+  return applyModule(keys, m, {
+    level,
+    delete: canChange && had.delete,
+    extras: Object.fromEntries((m.extras ?? []).map((x) => [x.key, level !== 'none' && had.extras[x.key]])),
+  });
+}
+
+export const isModuleLevel = (s: string): s is ModuleLevel => (LEVELS as string[]).includes(s);
+export const moduleByKey = (key: string) => ROLE_MODULES.find((m) => m.key === key);

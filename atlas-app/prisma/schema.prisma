@@ -709,7 +709,8 @@ model Store {
   catalogueEvents   CatalogueEvent[]
   carts             Cart[]
 
-  legacyRemarks LegacyRemark[]
+  legacyRemarks   LegacyRemark[]
+  accessOverrides UserAccessOverride[]
 
   @@unique([organizationId, branchCode])
   @@index([organizationId])
@@ -810,6 +811,7 @@ model User {
   avatarColor String?
 
   storeRoles                UserStoreRole[]
+  accessOverrides           UserAccessOverride[]
   sessions                  LoginSession[]
   passwordCopy              UserPasswordCopy?
   mobileRefreshTokens       MobileRefreshToken[]
@@ -12586,4 +12588,31 @@ model LegacyRemark {
 
   @@unique([storeId, docRef, sourceRef])
   @@index([storeId, docRef, at])
+}
+
+/// ONE PERSON'S OWN ACCESS TO ONE MODULE, IN ONE BRANCH (30 Oct 2026).
+///
+/// Roles give the same access to everyone who holds them. Vcare asked for the
+/// switch per person ("kaunsa user specifically kis feature ko access kr skta
+/// h"): Settings > Operations & approvals writes a row here when a person's
+/// level differs from their roles, and deletes it when it matches again. The
+/// level replaces the module's View / Edit / Approve keys for that person in
+/// that branch (server/context); every other module still comes from roles.
+model UserAccessOverride {
+  id        String   @id @default(cuid())
+  storeId   String
+  store     Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// lib/role-modules ROLE_MODULES key.
+  moduleKey String
+  /// none | view | edit | approve
+  level     String
+  /// Who set it - the audit trigger records the rest.
+  setBy     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([storeId, userId, moduleKey])
+  @@index([userId])
 }
