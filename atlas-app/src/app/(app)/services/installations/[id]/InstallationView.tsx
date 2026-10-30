@@ -24,7 +24,7 @@ import type { FindableProduct } from '@/components/document/ProductFinder';
 import { searchGoodsAction } from '@/app/actions/search-options';
 import { JobParts, type ChallanVM } from '../../complaints/[id]/JobParts';
 import {
-  installAddItemAction, installBillAction, installBillDraftAction, installItemQtyAction, installItemsAction,
+  installAddItemAction, installLineSerialsAction, installBillAction, installBillDraftAction, installItemQtyAction, installItemsAction,
   installRemarkAction, installRemoveItemAction, installReturnAction, installSendBackAction, installTeamAction,
   installCustomerAction, installSiteAction, installWaiveAction, installWorkDoneAction, getInstallationShareLink, updatePaperworkAction,
 } from '../actions';
@@ -79,7 +79,10 @@ export function InstallationView({ data: d, files, canEdit, canBill, parts }: {
   const [remark, setRemark] = useState('');
   const [adding, setAdding] = useState<{ product: SearchOption | null; qty: string; units: { id: string; serialNo: string }[] } | null>(null);
   // A serial product must name its units when added (30 Oct 2026, Vcare).
-  const addSerial = !!adding?.product && !!parts?.catalogue.find((p) => p.id === adding.product!.id)?.serial;
+  const isSerial = (productId: string | null) => !!productId && !!parts?.catalogue.find((p) => p.id === productId)?.serial;
+  const addSerial = !!adding?.product && isSerial(adding.product.id);
+  // A serial line added before serials were asked for: pick them here (30 Oct 2026).
+  const [serialsFor, setSerialsFor] = useState<{ id: string; units: { id: string; serialNo: string }[] } | null>(null);
   // The line whose unused goods are being sent back, and how many (R2).
   const [returning, setReturning] = useState<{ id: string; n: number } | null>(null);
 
@@ -263,7 +266,21 @@ export function InstallationView({ data: d, files, canEdit, canBill, parts }: {
                       )}
                     </td>
                     <td className="px-3 py-2 text-xs">{it.placement || <span className="text-muted-foreground">-</span>}</td>
-                    <td className="px-3 py-2 font-mono text-xs">{it.serialNo || <span className="text-muted-foreground">-</span>}</td>
+                    <td className="px-3 py-2 font-mono text-xs">
+                      {it.serialNo || <span className="text-muted-foreground">-</span>}
+                      {!locked && !it.stockUnitId && !it.qtyReturned && !it.qtyReturnPending && isSerial(it.productId) && (serialsFor?.id === it.id ? (
+                        <div className="mt-1 grid gap-1 font-sans">
+                          <ShelfUnits productId={it.productId!} need={it.qty} value={serialsFor.units} onChange={(units) => setSerialsFor({ id: it.id, units })} />
+                          <span className="flex gap-2">
+                            <Button size="sm" variant="primary" loading={pending} disabled={serialsFor.units.length !== it.qty}
+                              onClick={() => { const u = serialsFor.units; setSerialsFor(null); run(() => installLineSerialsAction(d.id, it.id, u.map((x) => x.id)), 'Serials added'); }}>Save</Button>
+                            <Button size="sm" variant="ghost" onClick={() => setSerialsFor(null)}>Cancel</Button>
+                          </span>
+                        </div>
+                      ) : (
+                        <button type="button" className="ms-2 font-sans font-medium text-brand hover:underline" onClick={() => setSerialsFor({ id: it.id, units: [] })}>Pick serial{it.qty === 1 ? '' : 's'}</button>
+                      ))}
+                    </td>
                     <td className="px-3 py-2">
                       <label className="inline-flex cursor-pointer items-center gap-1.5">
                         <input type="checkbox" disabled={locked} checked={it.fitStatus !== 'to_fit'} aria-label={`${it.productName} fitted`}

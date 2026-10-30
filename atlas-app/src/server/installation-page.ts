@@ -282,26 +282,60 @@ export async function addInstallationItem(scope: StoreScope, id: string, input: 
   }
   // A serial product names its units (30 Oct 2026, Vcare): one line per unit, as
   // the phone's scan keeps them, so each carries its own serial and warranty.
-  const ids = [...new Set(input.unitIds ?? [])];
-  if (ids.length !== qty) throw new InstallationChallanError(`${p.productName} is kept by serial number - pick ${qty} serial${qty === 1 ? '' : 's'}.`);
-  const units = await db.stockUnit.findMany({ where: { id: { in: ids }, storeId: c.storeId, productId: p.id, status: 'in_stock' }, select: { id: true, serialNo: true } });
-  if (units.length !== ids.length || units.some((u) => !u.serialNo)) throw new InstallationChallanError('A serial picked is not on the shelf any more - pick again.');
-  const { scanUnitOntoChallan } = await import('./field-app');
+  const units = await shelfSerials(c.storeId, p, input.unitIds ?? [], qty);
   let srNo = last._max.srNo ?? 0;
-  for (const u of units) {
-    const line = await db.installationChallanItem.create({
-      data: { challanId: id, productId: p.id, productName: p.productName, qty: 1, unit: p.unit, srNo: ++srNo },
-      select: { id: true },
-    });
-    try {
-      await scanUnitOntoChallan(scope, { challanItemId: line.id, serialNo: u.serialNo! }, userId);
-    } catch (e) {
-      // No line left behind without its serial; the scan's words reach the office.
-      await db.installationChallanItem.delete({ where: { id: line.id } });
-      throw new InstallationChallanError(e instanceof Error ? e.message : 'Could not put that serial on the line.');
-    }
-  }
+  for (const u of units) await serialLine(scope, id, p, u.serialNo, ++srNo, userId);
   await log(c.storeId, id, userId, 'Items', `Added ${p.productName} × ${qty} (S/N ${units.map((u) => u.serialNo).join(', ')})`);
+}
+
+/** The units picked: exactly `qty`, this product's, on the shelf, each with a serial. */
+async function shelfSerials(storeId: string, p: { id: string; productName: string }, unitIds: string[], qty: number) {
+  const ids = [...new Set(unitIds)];
+  if (ids.length !== qty) throw new InstallationChallanError(`${p.productName} is kept by serial number - pick ${qty} serial${qty === 1 ? '' : 's'}.`);
+  const units = await db.stockUnit.findMany({ where: { id: { in: ids }, storeId, productId: p.id, status: 'in_stock' }, select: { id: true, serialNo: true } });
+  if (units.length !== ids.length || units.some((u) => !u.serialNo)) throw new InstallationChallanError('A serial picked is not on the shelf any more - pick again.');
+  return units.map((u) => ({ id: u.id, serialNo: u.serialNo! }));
+}
+
+/** A serial onto a line - a new qty-1 line unless `lineId` is given - scanned on as the phone does. */
+async function serialLine(scope: StoreScope, challanId: string, p: { id: string; productName: string; unit: string | null }, serialNo: string, srNo: number, userId: string, lineId?: string) {
+  const line = lineId ?? (await db.installationChallanItem.create({
+    data: { challanId, productId: p.id, productName: p.productName, qty: 1, unit: p.unit, srNo },
+    select: { id: true },
+  })).id;
+  const { scanUnitOntoChallan } = await import('./field-app');
+  try {
+    await scanUnitOntoChallan(scope, { challanItemId: line, serialNo }, userId);
+  } catch (e) {
+    // No new line left behind without its serial; the scan's words reach the office.
+    if (!lineId) await db.installationChallanItem.delete({ where: { id: line } });
+    throw new InstallationChallanError(e instanceof Error ? e.message : 'Could not put that serial on the line.');
+  }
+}
+
+/**
+ * Serials for a line added before they were asked for (30 Oct 2026, Vcare): one
+ * per piece. The line keeps the first and becomes qty 1; each other piece gets
+ * its own line, as the phone's scan keeps them.
+ */
+export async function pickInstallationLineSerials(scope: StoreScope, id: string, itemId: string, unitIds: string[], userId: string): Promise<void> {
+  const c = await own(scope, id);
+  if (closed(c)) throw new InstallationChallanError('This installation is billed, so it is closed.');
+  const it = await db.installationChallanItem.findFirst({
+    where: { id: itemId, challanId: id },
+    select: { id: true, qty: true, qtyReturned: true, qtyReturnPending: true, stockUnitId: true, product: { select: { id: true, productName: true, unit: true, trackingMode: true } } },
+  });
+  if (!it?.product) throw new InstallationChallanError('That line is not on this installation.');
+  if (it.product.trackingMode !== 'serial') throw new InstallationChallanError(`${it.product.productName} is not kept by serial number.`);
+  if (it.stockUnitId) throw new InstallationChallanError('This line already has its serial.');
+  if (it.qtyReturned || it.qtyReturnPending) throw new InstallationChallanError('Goods on this line are coming back through the store - its serials cannot change now.');
+  const units = await shelfSerials(c.storeId, it.product, unitIds, it.qty);
+  const last = await db.installationChallanItem.aggregate({ where: { challanId: id }, _max: { srNo: true } });
+  if (it.qty > 1) await db.installationChallanItem.update({ where: { id: it.id }, data: { qty: 1 } });
+  await serialLine(scope, id, it.product, units[0].serialNo, 0, userId, it.id);
+  let srNo = last._max.srNo ?? 0;
+  for (const u of units.slice(1)) await serialLine(scope, id, it.product, u.serialNo, ++srNo, userId);
+  await log(c.storeId, id, userId, 'Items', `${it.product.productName}: serials ${units.map((u) => u.serialNo).join(', ')}`);
 }
 
 export async function changeInstallationItemQty(scope: StoreScope, id: string, itemId: string, qty: number, userId: string): Promise<void> {

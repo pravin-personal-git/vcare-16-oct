@@ -11,7 +11,7 @@ import {
 } from '@/server/installation-challans';
 import type { ReceiptMethod } from '@/server/receipts';
 import {
-  addInstallationItem, addInstallationRemark, billInstallation, changeInstallationItemQty, installationBillDraft,
+  addInstallationItem, addInstallationRemark, pickInstallationLineSerials, billInstallation, changeInstallationItemQty, installationBillDraft,
   changeInstallationSite, markInstallationWorkDone, removeInstallationItem, sendBackInstallation, setInstallationCustomer, setInstallationTeam, updateInstallationItems,
   waiveInstallationBilling, type InstallationBillDraft,
 } from '@/server/installation-page';
@@ -179,6 +179,9 @@ export async function installItemsAction(id: string, items: { id: string; placem
 }
 export async function installAddItemAction(id: string, productId: string, qty: number, unitIds?: string[]): Promise<ActionState> {
   return pageGuard(id, (ctx) => addInstallationItem(ctx.scope, id, { productId, qty, unitIds }, ctx.user.id));
+}
+export async function installLineSerialsAction(id: string, itemId: string, unitIds: string[]): Promise<ActionState> {
+  return pageGuard(id, (ctx) => pickInstallationLineSerials(ctx.scope, id, itemId, unitIds, ctx.user.id));
 }
 export async function installItemQtyAction(id: string, itemId: string, qty: number): Promise<ActionState> {
   return pageGuard(id, (ctx) => changeInstallationItemQty(ctx.scope, id, itemId, qty, ctx.user.id));
