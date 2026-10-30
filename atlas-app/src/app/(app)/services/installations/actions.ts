@@ -12,7 +12,7 @@ import {
 import type { ReceiptMethod } from '@/server/receipts';
 import {
   addInstallationItem, addInstallationRemark, billInstallation, changeInstallationItemQty, installationBillDraft,
-  markInstallationWorkDone, removeInstallationItem, sendBackInstallation, setInstallationCustomer, setInstallationTeam, updateInstallationItems,
+  changeInstallationSite, markInstallationWorkDone, removeInstallationItem, sendBackInstallation, setInstallationCustomer, setInstallationTeam, updateInstallationItems,
   waiveInstallationBilling, type InstallationBillDraft,
 } from '@/server/installation-page';
 import { friendlyError } from '@/lib/friendly-error';
@@ -215,6 +215,10 @@ export async function installBillAction(id: string, input: { includeMaterial: bo
     console.error('[installation] bill failed', err);
     return { error: err instanceof Error ? err.message : friendlyError(err) };
   }
+}
+
+export async function installSiteAction(id: string, input: { siteId: string | null; otherPlace: boolean; text: string | null }): Promise<ActionState> {
+  return pageGuard(id, (ctx) => changeInstallationSite(ctx.scope, id, input, ctx.user.id));
 }
 
 export async function installCustomerAction(id: string, customerId: string): Promise<ActionState> {

@@ -306,6 +306,7 @@ function RaiseComplaintDialog({
 
   const pickSite = (id: string) => {
     setSiteId(id);
+    if (id === '__other') { setSiteLocation(''); return; }
     const s = sites.find((x) => x.id === id);
     if (!s) return;
     setSiteLocation([s.name, s.address].filter(Boolean).join(' - '));
@@ -317,7 +318,7 @@ function RaiseComplaintDialog({
   /** What the rules are judged against. Built once; the button and the save
       handler both read it, so they can never disagree. */
   const draftForRules = {
-    description, hasLocation: Boolean(location), productId, siteId, siteNote: siteLocation,
+    description, hasLocation: Boolean(location), productId, siteId: siteId === '__other' ? '' : siteId, siteNote: siteLocation,
   };
 
   const save = () => {
@@ -329,7 +330,7 @@ function RaiseComplaintDialog({
       const res = await createComplaintAction({
         customerId, productId: items.find((i) => i.productId)?.productId ?? null,
         items: items.map((i) => ({ ours: i.ours, stockUnitId: i.stockUnitId, productId: i.productId, equipmentName: i.equipmentName, serialNo: i.serialNo })),
-        siteLocation: siteLocation || null, siteId: siteId || null,
+        siteLocation: siteLocation || null, siteId: siteId && siteId !== '__other' ? siteId : null,
         siteLat: location?.lat ?? null, siteLng: location?.lng ?? null, siteSource: location?.source ?? null,
         description, priority, customFields,
       });
@@ -352,7 +353,7 @@ function RaiseComplaintDialog({
               branch's field rules say it is. "What is wrong" cannot be
               switched off (fallback 'block'), so it is always demanded. */}
           <Button variant="primary" onClick={save}
-            disabled={pending || complaintBlocker(rules, draftForRules) !== null}>
+            disabled={pending || complaintBlocker(rules, draftForRules) !== null || (sites.length > 1 && show('siteId') && !siteId)}>
             Raise complaint
           </Button>
         </div>
@@ -380,8 +381,10 @@ function RaiseComplaintDialog({
             <label className="grid gap-1 text-xs font-medium text-muted-foreground">
               Site{need('siteId') && <span className="text-danger"> *</span>}
               <select value={siteId} onChange={(e) => pickSite(e.target.value)} className={fieldClass}>
-                <option value="">Not one of their saved sites</option>
+                {/* Several sites: one must be chosen (30 Oct 2026) - an unchosen site sent the technician to the main address. */}
+                <option value="">{sites.length > 1 ? 'Choose the site…' : 'Not one of their saved sites'}</option>
                 {sites.map((s) => <option key={s.id} value={s.id}>{s.name}{s.contactName ? ` · ${s.contactName}` : ''}{s.latitude === null ? ' (no pin)' : ''}</option>)}
+                {sites.length > 1 && <option value="__other">Another place</option>}
               </select>
             </label>
           )}

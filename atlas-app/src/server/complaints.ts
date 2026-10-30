@@ -847,7 +847,7 @@ export async function scheduleInstallationVisit(
  */
 export async function scheduleSurveyVisit(
   scope: StoreScope,
-  input: { customerId: string; siteAddress: string | null; challanId: string | null },
+  input: { customerId: string; siteAddress: string | null; challanId: string | null; siteId?: string | null; otherPlace?: boolean },
   technicianId: string, scheduledAt: Date, userId: string | null,
 ) {
   const storeId = scopeForWrite(scope);
@@ -860,11 +860,15 @@ export async function scheduleSurveyVisit(
   }
   const tech = await db.user.findFirst({ where: { id: technicianId, ...userInScope(scope) }, select: { id: true } });
   if (!tech) throw new ComplaintError('That technician is not in your scope.');
+  // The customer's site, by the rule every job uses (30 Oct 2026) - carried onto the challan raised from it.
+  const { jobSite, SiteError } = await import('./sites');
+  const place = await jobSite(storeId, customer.id, { siteId: input.siteId, otherPlace: input.otherPlace ?? !input.siteId, text: input.siteAddress })
+    .catch((e) => { throw e instanceof SiteError ? new ComplaintError(e.message) : e; });
   await db.serviceVisit.create({
     data: {
       storeId, customerId: customer.id, installationChallanId: input.challanId, technicianId,
       purpose: 'info_collection', reason: 'installation_survey', scheduledAt, createdBy: userId,
-      siteAddress: input.siteAddress?.trim() || customer.addressLine1 || null,
+      siteId: place.siteId, siteAddress: place.siteLocation || customer.addressLine1 || null,
     },
   });
   if (input.challanId) {

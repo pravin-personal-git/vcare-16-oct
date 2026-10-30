@@ -3,7 +3,8 @@
 import { revalidatePath } from 'next/cache';
 import { visitSubject } from '@/lib/visit-reasons';
 import { requireContext } from '@/server/context';
-import { listSites } from '@/server/sites';
+import { addSiteForJob, listSites, SiteError } from '@/server/sites';
+import type { SiteInput } from '@/lib/sites';
 import {
   listComplaints, getComplaintDetail, createComplaint, assignTechnician, setResolutionType,
   updateComplaintStatus, addComplaintNote, listServiceVisits, scheduleVisit, scheduleInstallationVisit, completeVisit, rescheduleVisit, cancelVisit,
@@ -164,6 +165,24 @@ export async function requestWarrantyVoidAction(itemId: string, reason: string, 
     const ctx = await requireContext();
     await requestWarrantyVoid(ctx.scope, itemId, { reason, photoId }, ctx.user.id);
   });
+}
+
+/**
+ * "+ New site" from a job form (30 Oct 2026): anyone raising a complaint or an
+ * installation may add the customer's site there and then - saved to the
+ * customer, so the next job finds it in the list.
+ */
+export async function addJobSiteAction(customerId: string, input: SiteInput): Promise<{ error?: string; site?: Awaited<ReturnType<typeof addSiteForJob>> }> {
+  try {
+    const ctx = await requireContext();
+    const p = ctx.permissions;
+    if (!['complaints.edit', 'installations.edit', 'customers.edit', 'orders.edit'].some((k) => p.has(k))) return { error: 'You do not have permission to add a site.' };
+    if (ctx.scope.kind !== 'single') return { error: 'Select a single branch first.' };
+    return { site: await addSiteForJob(ctx.scope, customerId, input) };
+  } catch (err) {
+    if (err instanceof SiteError) return { error: err.message };
+    return { error: friendlyError(err) };
+  }
 }
 
 /** The customer's named sites (Phase 5), active ones only, for the complaint form. */
@@ -615,10 +634,11 @@ export async function removeJobPhoto(
  */
 export async function scheduleSurveyVisitAction(input: {
   customerId: string; siteAddress: string | null; challanId: string | null; technicianId: string; scheduledAt: string;
+  siteId?: string | null; otherPlace?: boolean;
 }): Promise<ActionState> {
   return guard(async () => {
     const ctx = await requireContext();
     const { scheduleSurveyVisit } = await import('@/server/complaints');
-    await scheduleSurveyVisit(ctx.scope, { customerId: input.customerId, siteAddress: input.siteAddress, challanId: input.challanId }, input.technicianId, istWallClock(input.scheduledAt), ctx.user.id);
+    await scheduleSurveyVisit(ctx.scope, { customerId: input.customerId, siteAddress: input.siteAddress, challanId: input.challanId, siteId: input.siteId, otherPlace: input.otherPlace }, input.technicianId, istWallClock(input.scheduledAt), ctx.user.id);
   });
 }

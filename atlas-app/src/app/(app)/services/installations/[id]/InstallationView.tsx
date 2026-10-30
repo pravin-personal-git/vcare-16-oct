@@ -13,6 +13,7 @@ import type { AttachmentView } from '@/components/ui/Attachments';
 import { SearchSelect, type SearchOption } from '@/components/ui/SearchSelect';
 import { QuickVisitDialog } from '@/components/services/QuickVisitDialog';
 import { CustomerPicker } from '@/components/services/CustomerPicker';
+import { SitePicker, type SiteChoice } from '@/components/services/SitePicker';
 import { docMessage } from '@/lib/wa-message';
 import { openWhatsApp } from '@/lib/wa-open';
 import { formatCurrency } from '@/lib/format';
@@ -24,7 +25,7 @@ import { JobParts, type ChallanVM } from '../../complaints/[id]/JobParts';
 import {
   installAddItemAction, installBillAction, installBillDraftAction, installItemQtyAction, installItemsAction,
   installRemarkAction, installRemoveItemAction, installReturnAction, installSendBackAction, installTeamAction,
-  installCustomerAction, installWaiveAction, installWorkDoneAction, getInstallationShareLink, updatePaperworkAction,
+  installCustomerAction, installSiteAction, installWaiveAction, installWorkDoneAction, getInstallationShareLink, updatePaperworkAction,
 } from '../actions';
 
 const fmt = (iso: string) => new Date(iso).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: 'numeric', minute: '2-digit', timeZone: 'Asia/Kolkata' });
@@ -69,6 +70,7 @@ export function InstallationView({ data: d, files, canEdit, canBill, parts }: {
   const [visit, setVisit] = useState(false);
   const [workDone, setWorkDone] = useState(false);
   const [billing, setBilling] = useState(false);
+  const [changingSite, setChangingSite] = useState(false);
   const [reasonFor, setReasonFor] = useState<null | { title: string; label: string; run: (r: string) => Promise<{ error?: string }> }>(null);
   const [tab, setTab] = useState<'remarks' | 'activity' | 'photos'>('remarks');
   const [team, setTeam] = useState<string[]>(d.team.map((t) => t.id));
@@ -169,6 +171,7 @@ export function InstallationView({ data: d, files, canEdit, canBill, parts }: {
         <div className="flex flex-wrap items-center gap-2 text-sm">
           <Icon name="map-pin" className="h-4 w-4 text-muted-foreground" />
           <span>{d.site.text || 'No site written'}</span>
+          {!locked && d.customer.id && <button type="button" className="text-brand hover:underline" onClick={() => setChangingSite(true)}>Change site</button>}
           {mapHref && <a href={mapHref} target="_blank" rel="noreferrer" className="text-brand hover:underline">Map</a>}
           <Badge>{d.items.length} item{d.items.length === 1 ? '' : 's'}</Badge>
           {d.priority !== 'normal' && <Badge tone={d.priority === 'urgent' || d.priority === 'high' ? 'danger' : 'neutral'}>{d.priority}</Badge>}
@@ -414,6 +417,10 @@ export function InstallationView({ data: d, files, canEdit, canBill, parts }: {
       )}
       {workDone && <WorkDoneDialog onClose={() => setWorkDone(false)} onSave={(to) => { setWorkDone(false); run(() => installWorkDoneAction(d.id, to), 'Work done - bill it next'); }} />}
       {billing && <BillDialog id={d.id} hasOrder={!!d.order} onClose={() => setBilling(false)} onDone={(msg) => { setBilling(false); setToast(msg); setTimeout(() => setToast(null), 5000); router.refresh(); }} />}
+      {changingSite && d.customer.id && (
+        <SiteDialog customerId={d.customer.id} current={d.site} onClose={() => setChangingSite(false)}
+          onSave={(v) => { setChangingSite(false); run(() => installSiteAction(d.id, v), 'Site changed'); }} />
+      )}
       {reasonFor && <ReasonDialog title={reasonFor.title} label={reasonFor.label} onClose={() => setReasonFor(null)} onSave={(r) => { const f = reasonFor; setReasonFor(null); run(() => f.run(r)); }} />}
       {toast && <div role="status" className="fixed bottom-5 start-1/2 z-[60] -translate-x-1/2 rounded bg-foreground px-4 py-3 text-sm text-background shadow-raised rtl:translate-x-1/2">{toast}</div>}
     </div>
@@ -524,6 +531,20 @@ function ReasonDialog({ title, label, onClose, onSave }: { title: string; label:
       <label className="block text-sm">{label}
         <input value={r} onChange={(e) => setR(e.target.value)} autoFocus className="mt-1 h-10 w-full rounded-sm border border-border bg-card px-3" />
       </label>
+    </Modal>
+  );
+}
+
+/** Where it is fitted - one of the customer's sites, or another place (30 Oct 2026). */
+function SiteDialog({ customerId, current, onClose, onSave }: {
+  customerId: string; current: InstallationPage['site']; onClose: () => void; onSave: (v: { siteId: string | null; otherPlace: boolean; text: string | null }) => void;
+}) {
+  const [site, setSite] = useState<SiteChoice>(current.id ? { siteId: current.id, otherPlace: false, text: '' } : { siteId: null, otherPlace: true, text: current.text ?? '' });
+  const ok = !!site.siteId || (site.otherPlace && !!site.text.trim());
+  return (
+    <Modal title="Change site" subtitle="The technician's phone and the map follow this" icon="map-pin" size="sm" onClose={onClose}
+      footer={<><Button onClick={onClose}>Cancel</Button><Button variant="primary" disabled={!ok} onClick={() => onSave({ siteId: site.siteId, otherPlace: site.otherPlace, text: site.text.trim() || null })}>Save</Button></>}>
+      <SitePicker id="change-site" customerId={customerId} value={site} onChange={setSite} />
     </Modal>
   );
 }

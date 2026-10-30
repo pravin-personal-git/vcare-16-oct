@@ -91,7 +91,8 @@ export interface InstallationPage {
   physicalChallanNo: string | null;
   note: string | null;
   technicianRemark: string | null;
-  site: { text: string | null; lat: number | null; lng: number | null };
+  /** `id`: the customer's saved site it is linked to (30 Oct 2026); null = another place, or before then. */
+  site: { id: string | null; text: string | null; lat: number | null; lng: number | null };
   customer: { id: string | null; name: string | null; phone: string | null };
   order: { id: string; orderNo: string; totalPaise: number; quotation: { id: string; no: string } | null } | null;
   team: { id: string; name: string; phone: string | null }[];
@@ -166,6 +167,7 @@ export async function getInstallationPage(scope: StoreScope, id: string): Promis
     createdAt: c.createdAt.toISOString(), dispatchedAt: c.dispatchedAt.toISOString(), completedAt: c.completedAt?.toISOString() ?? null,
     physicalChallanNo: c.physicalChallanNo, note: c.note, technicianRemark: c.technicianRemark,
     site: {
+      id: c.siteId,
       text: c.siteLocation ?? c.salesOrder?.shippingAddress ?? cu?.addressLine1 ?? null,
       lat: c.siteLat === null ? null : Number(c.siteLat), lng: c.siteLng === null ? null : Number(c.siteLng),
     },
@@ -324,6 +326,25 @@ export async function setInstallationTeam(scope: StoreScope, id: string, input: 
   ]);
   await log(c.storeId, id, userId, 'Team', `Technicians: ${ids.length} · priority ${priority}`);
   await syncInstallationStage(id, userId);
+}
+
+/**
+ * Change where it is fitted (30 Oct 2026, Vcare) - the saved site, its words
+ * and its pin together, by the rule every job uses. Until billed; logged.
+ */
+export async function changeInstallationSite(scope: StoreScope, id: string, input: { siteId: string | null; otherPlace: boolean; text: string | null }, userId: string): Promise<void> {
+  const c = await own(scope, id);
+  if (closed(c)) throw new InstallationChallanError('This installation is billed, so it is closed.');
+  const ch = await db.installationChallan.findUnique({ where: { id }, select: { customerId: true, siteLocation: true } });
+  if (!ch?.customerId) throw new InstallationChallanError('Set the customer first.');
+  const { jobSite, SiteError } = await import('./sites');
+  const place = await jobSite(c.storeId, ch.customerId, input).catch((e) => { throw e instanceof SiteError ? new InstallationChallanError(e.message) : e; });
+  if (!place.siteId && !place.siteLocation) throw new InstallationChallanError('Type the address of the place.');
+  await db.installationChallan.update({
+    where: { id },
+    data: { siteId: place.siteId, siteLocation: place.siteLocation, siteLat: place.siteLat, siteLng: place.siteLng },
+  });
+  await log(c.storeId, id, userId, 'Site', `Site changed: ${ch.siteLocation ?? 'none'} → ${place.siteLocation}`);
 }
 
 /** The customer on a challan that has none - older ones raised with no order (27 Oct 2026). */

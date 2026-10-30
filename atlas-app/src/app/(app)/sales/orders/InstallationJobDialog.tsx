@@ -39,10 +39,15 @@ export function InstallationJobDialog({ salesOrderId, onClose }: { salesOrderId:
   // The pin follows the complaint Field rule (5 Oct 2026); switched off, the
   // technician captures it on arrival.
   const free = setup ? setup.items.filter((i) => !i.coveredBy && i.qty > 0) : [];
-  const ready = !!setup && !setup.openJob && lines.length > 0 && (!setup.locationRequired || !!siteId || !!location);
+  // '' = not chosen yet, '__other' = another place (30 Oct 2026: '' used to mean "another place",
+  // so a customer with several sites got the order's address unless someone changed the box).
+  const picked = setup?.sites.find((s) => s.id === siteId);
+  const chosen = !!picked || siteId === '__other' || (setup?.sites.length ?? 0) === 0;
+  const needPin = !picked || picked.lat === null;
+  const ready = !!setup && !setup.openJob && lines.length > 0 && chosen && (!setup.locationRequired || !needPin || !!location);
   const create = () => start(async () => {
     setError(null);
-    const r = await createInstallationJobAction(salesOrderId, { siteId: siteId || null, location: siteId ? null : location, siteNote: siteNote.trim() || null, priority, note: note.trim() || null, lineIds: lines });
+    const r = await createInstallationJobAction(salesOrderId, { siteId: picked?.id ?? null, location: needPin ? location : null, siteNote: siteNote.trim() || null, priority, note: note.trim() || null, lineIds: lines });
     if (r.error || !r.href) { setError(r.error ?? 'Could not create the installation.'); return; }
     router.push(r.href);
   });
@@ -86,12 +91,14 @@ export function InstallationJobDialog({ salesOrderId, onClose }: { salesOrderId:
               {setup.sites.length > 0 && (
                 <Field label="Customer's site" htmlFor="ij-site">
                   <select id="ij-site" value={siteId} onChange={(e) => setSiteId(e.target.value)} className="field-input">
-                    <option value="">Another place - capture the location below</option>
-                    {setup.sites.map((s) => <option key={s.id} value={s.id}>{s.name}{s.address ? ` - ${s.address}` : ''}</option>)}
+                    {setup.sites.length > 1 && <option value="">Choose the site…</option>}
+                    {setup.sites.map((s) => <option key={s.id} value={s.id}>{s.name}{s.address ? ` - ${s.address}` : ''}{s.lat === null ? ' (no pin)' : ''}</option>)}
+                    <option value="__other">Another place - capture the location below</option>
                   </select>
                 </Field>
               )}
-              {!siteId && (
+              {setup.sites.length > 1 && !chosen && <p className="text-xs text-warning">This customer has {setup.sites.length} sites - choose where it is fitted.</p>}
+              {chosen && needPin && (
                 <div className="grid gap-1">
                   <p className="text-xs font-medium">Installation location{setup.locationRequired ? '' : ' (optional)'}</p>
                   <LocationCapture value={location} onChange={setLocation} required={setup.locationRequired}

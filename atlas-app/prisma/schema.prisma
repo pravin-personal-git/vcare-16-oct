@@ -4419,9 +4419,12 @@ model ServiceVisit {
   /// reason and nothing else. When a challan is raised from the survey, the
   /// visit gets that challan too.
   customerId  String?
-  customer    Party?  @relation("ServiceVisitCustomer", fields: [customerId], references: [id], onDelete: SetNull)
+  customer    Party?     @relation("ServiceVisitCustomer", fields: [customerId], references: [id], onDelete: SetNull)
   /// Where to go, when there is no complaint or challan to borrow a site from.
   siteAddress String?
+  /// A survey's saved site (30 Oct 2026) - carried onto the challan raised from it.
+  siteId      String?
+  site        PartySite? @relation(fields: [siteId], references: [id], onDelete: SetNull)
 
   technicianId String
   technician   User   @relation("ServiceVisitTechnician", fields: [technicianId], references: [id])
@@ -4699,8 +4702,13 @@ model InstallationChallan {
   /// sales order is a challan, not a complaint - so the site the office captured
   /// lives here: the text, and the pin the technician's on-site check reads.
   siteLocation String?
-  siteLat      Decimal? @db.Decimal(9, 6)
-  siteLng      Decimal? @db.Decimal(9, 6)
+  siteLat      Decimal?   @db.Decimal(9, 6)
+  siteLng      Decimal?   @db.Decimal(9, 6)
+  /// The customer's saved site it is fitted at (30 Oct 2026, Vcare): text and
+  /// pin above are copied from it, so a customer with several sites gets the
+  /// one the office chose - not their main address.
+  siteId       String?
+  site         PartySite? @relation(fields: [siteId], references: [id], onDelete: SetNull)
 
   /// The working stage, moved by what happens (27 Oct 2026): raised |
   /// technician | visit | fitting | work_done | billed - see
@@ -10664,7 +10672,9 @@ model PartySite {
   /// The client's id in the system it was migrated from, where it had one.
   legacyRef String?
 
-  complaints Complaint[]
+  complaints           Complaint[]
+  installationChallans InstallationChallan[]
+  surveyVisits         ServiceVisit[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

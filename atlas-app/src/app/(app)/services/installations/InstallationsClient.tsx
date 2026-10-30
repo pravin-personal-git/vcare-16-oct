@@ -18,6 +18,7 @@ import { QuickVisitDialog } from '@/components/services/QuickVisitDialog';
 import { SearchSelect, type SearchOption } from '@/components/ui/SearchSelect';
 import { searchGoodsAction, searchOpenOrdersAction, customerSurveysAction, type CustomerPick } from '@/app/actions/search-options';
 import { CustomerPicker } from '@/components/services/CustomerPicker';
+import { SitePicker, type SiteChoice } from '@/components/services/SitePicker';
 import { istDate } from '@/lib/date-ranges';
 import {
   setChallanStatusAction, updatePaperworkAction,
@@ -50,7 +51,7 @@ export function InstallationsClient({
   canEdit, challans, paging, counts, status, rangeLabel, totalAll, technicians, staff, canExport, views, initialOpenId = null, fromSurvey = null,
 }: {
   /** ?survey= - "Raise a challan from this survey": the form opens on its customer (27 Oct 2026). */
-  fromSurvey?: { visitId: string; customer: CustomerPick; site: string | null } | null;
+  fromSurvey?: { visitId: string; customer: CustomerPick; site: string | null; siteId?: string | null } | null;
   /** From `?open=`, so a global-search hit opens the record itself. */
   initialOpenId?: string | null;
   canEdit: boolean;
@@ -426,7 +427,7 @@ function PaperworkForm({
 }
 
 type SaveInput = {
-  salesOrderId: string | null; customerId?: string | null; siteLocation?: string | null; surveyVisitId?: string | null;
+  salesOrderId: string | null; customerId?: string | null; siteId?: string | null; otherPlace?: boolean; siteLocation?: string | null; surveyVisitId?: string | null;
   physicalChallanNo: string | null; dispatchedAt: string;
   technicianRemark: string | null; note: string | null; assigneeIds: string[];
   items: { id?: string | null; productId: string | null; productName: string; barcode: string | null; qty: number; unit: string | null }[];
@@ -469,7 +470,7 @@ function EditLoader({ challan, staff, pending, onClose, onSave }: {
  */
 function ChallanForm({ staff, pending, onClose, onSave, initial, fromSurvey = null }: {
   staff: StaffOption[]; pending: boolean; onClose: () => void; onSave: (input: SaveInput) => void;
-  fromSurvey?: { visitId: string; customer: CustomerPick; site: string | null } | null;
+  fromSurvey?: { visitId: string; customer: CustomerPick; site: string | null; siteId?: string | null } | null;
   initial?: {
     challanNo: string; order: SearchOption | null; assigneeIds: string[]; slip: string; remark: string; note: string;
     dispatchedAt: string; lines: Line[];
@@ -478,7 +479,10 @@ function ChallanForm({ staff, pending, onClose, onSave, initial, fromSurvey = nu
   const [order, setOrder] = useState<SearchOption | null>(initial?.order ?? null);
   // Customer first (27 Oct 2026): a challan names its customer, with or without an order.
   const [customer, setCustomer] = useState<CustomerPick | null>(fromSurvey?.customer ?? null);
-  const [site, setSite] = useState(fromSurvey?.site ?? '');
+  // Where it is fitted (30 Oct 2026): a saved site of the customer, or another place - never their main address by default.
+  const [site, setSite] = useState<SiteChoice>(fromSurvey?.siteId
+    ? { siteId: fromSurvey.siteId, otherPlace: false, text: '' }
+    : { siteId: null, otherPlace: !!fromSurvey?.site, text: fromSurvey?.site ?? '' });
   const [surveys, setSurveys] = useState<{ id: string; label: string }[]>([]);
   const [surveyId, setSurveyId] = useState(fromSurvey?.visitId ?? '');
   const customerId = customer?.id ?? null;
@@ -497,7 +501,7 @@ function ChallanForm({ staff, pending, onClose, onSave, initial, fromSurvey = nu
   const [lines, setLines] = useState<Line[]>(initial?.lines.length ? initial.lines : [{ product: null, unit: null, barcode: '', qty: '1' }]);
 
   const set = (i: number, patch: Partial<Line>) => setLines((ls) => ls.map((l, x) => (x === i ? { ...l, ...patch } : l)));
-  const ready = lines.some((l) => l.product && Number(l.qty) > 0) && (!!initial || !!customer || !!order);
+  const ready = lines.some((l) => l.product && Number(l.qty) > 0) && (!!initial || (!!customer && (!!site.siteId || site.otherPlace)) || !!order);
 
   return (
     <Modal
@@ -512,7 +516,7 @@ function ChallanForm({ staff, pending, onClose, onSave, initial, fromSurvey = nu
           <button type="button" disabled={pending || !ready}
             onClick={() => onSave({
               salesOrderId: order?.id ?? null,
-              ...(initial ? {} : { customerId: customer?.id ?? null, siteLocation: site.trim() || null, surveyVisitId: surveyId || null }),
+              ...(initial ? {} : { customerId: customer?.id ?? null, siteId: site.siteId, otherPlace: site.otherPlace, siteLocation: site.text.trim() || null, surveyVisitId: surveyId || null }),
               physicalChallanNo: slip.trim() || null,
               dispatchedAt: `${date}T12:00:00+05:30`,
               technicianRemark: remark.trim() || null,
@@ -540,11 +544,11 @@ function ChallanForm({ staff, pending, onClose, onSave, initial, fromSurvey = nu
           <>
             <div>
               <label className="mb-1 block text-xs font-medium" htmlFor="cr-customer">Customer *</label>
-              <CustomerPicker id="cr-customer" value={customer} onChange={(c) => { setCustomer(c); if (c?.address && !site.trim()) setSite(c.address); }} />
+              <CustomerPicker id="cr-customer" value={customer} onChange={(c) => { setCustomer(c); setSite({ siteId: null, otherPlace: false, text: '' }); }} />
             </div>
             <div>
-              <label className="mb-1 block text-xs font-medium" htmlFor="cr-site">Site address</label>
-              <input id="cr-site" value={site} onChange={(e) => setSite(e.target.value)} placeholder="Where it is being fitted" className={fieldClass} />
+              <label className="mb-1 block text-xs font-medium" htmlFor="cr-site">Site *</label>
+              <SitePicker key={customer?.id ?? 'none'} id="cr-site" customerId={customer?.id ?? null} value={site} onChange={setSite} />
             </div>
           </>
         )}

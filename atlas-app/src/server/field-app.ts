@@ -309,7 +309,7 @@ export async function visitDetail(scope: StoreScope, visitId: string) {
       */
       installationChallan: {
         select: {
-          id: true, challanNo: true, note: true,
+          id: true, challanNo: true, note: true, siteLocation: true, siteLat: true, siteLng: true,
           items: { select: { productName: true, qty: true }, orderBy: { srNo: 'asc' }, take: 12 },
           /*
             The ORDER'S buyer snapshot, not the party record. An order keeps
@@ -381,6 +381,8 @@ export async function visitDetail(scope: StoreScope, visitId: string) {
     siteName: v.complaint?.site?.name ?? null,
     siteAddress: v.complaint?.site?.address
       ?? v.complaint?.siteLocation
+      // An installation's visit goes to the challan's site (30 Oct 2026) - not the customer's main address.
+      ?? ch?.siteLocation
       ?? v.siteAddress
       ?? (cu ? [cu.addressLine1, cu.city].filter(Boolean).join(', ') : '')
       // For an installation, where the goods were going.
@@ -389,8 +391,8 @@ export async function visitDetail(scope: StoreScope, visitId: string) {
       ?? null,
     // Only a complaint carries captured site coordinates, so an installation
     // visit has no map pin and no check-in. Said once, in complaints.ts.
-    siteLat: v.complaint?.siteLat ? Number(v.complaint.siteLat) : null,
-    siteLng: v.complaint?.siteLng ? Number(v.complaint.siteLng) : null,
+    siteLat: v.complaint?.siteLat ? Number(v.complaint.siteLat) : ch?.siteLat ? Number(ch.siteLat) : null,
+    siteLng: v.complaint?.siteLng ? Number(v.complaint.siteLng) : ch?.siteLng ? Number(ch.siteLng) : null,
     calls: calls.map((c): VisitCall => ({
       id: c.id,
       startedAt: c.startedAt,

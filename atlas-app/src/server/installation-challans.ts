@@ -318,7 +318,14 @@ export interface CreateInstallationChallanInput {
   salesOrderId: string | null;
   /** Required unless an order is chosen, whose customer it then is (27 Oct 2026). */
   customerId?: string | null;
+  /** The customer's saved site (30 Oct 2026); with several sites one must be chosen, or `otherPlace`. */
+  siteId?: string | null;
+  otherPlace?: boolean;
+  /** Words for the place - the address for "another place", or gate / floor for a saved site. */
   siteLocation?: string | null;
+  /** A pin captured on the form for "another place". */
+  siteLat?: number | null;
+  siteLng?: number | null;
   /** The survey visit this job came from - linked to the new challan. */
   surveyVisitId?: string | null;
   physicalChallanNo: string | null;
@@ -343,23 +350,42 @@ export async function createInstallationChallan(
   }
 
   let customerId = input.customerId ?? null;
-  let site = input.siteLocation?.trim() || null;
+  let fallback: string | null = null;
   if (input.salesOrderId) {
     const order = await db.salesOrder.findFirst({ where: { id: input.salesOrderId, storeId }, select: { id: true, partyId: true, shippingAddress: true } });
     if (!order) throw new InstallationChallanError('That sales order is not in your scope.');
     if (customerId && order.partyId && customerId !== order.partyId) throw new InstallationChallanError('That sales order is for a different customer.');
     customerId ??= order.partyId;
-    site ??= order.shippingAddress;
+    fallback = order.shippingAddress;
   }
   if (!customerId) throw new InstallationChallanError('Choose the customer.');
   const cust = await db.party.findFirst({ where: { id: customerId, storeId }, select: { id: true, addressLine1: true } });
   if (!cust) throw new InstallationChallanError('That customer is not in your scope.');
-  site ??= cust.addressLine1;
   const survey = input.surveyVisitId
-    ? await db.serviceVisit.findFirst({ where: { id: input.surveyVisitId, storeId, reason: 'installation_survey' }, select: { id: true, customerId: true, installationChallanId: true } })
+    ? await db.serviceVisit.findFirst({ where: { id: input.surveyVisitId, storeId, reason: 'installation_survey' }, select: { id: true, customerId: true, installationChallanId: true, siteId: true } })
     : null;
   if (input.surveyVisitId && !survey) throw new InstallationChallanError('That survey is not in your scope.');
   if (survey?.installationChallanId) throw new InstallationChallanError('That survey already belongs to another challan.');
+
+  /*
+    WHERE IT IS FITTED (30 Oct 2026, Vcare ICH-DURG001-2026-0004): the site the
+    office chose - or the survey's - never the customer's main address by
+    default. Several sites and none chosen is refused (server/sites jobSite).
+  */
+  const { jobSite, SiteError } = await import('./sites');
+  let place;
+  try {
+    place = await jobSite(storeId, customerId, {
+      siteId: input.siteId ?? (input.otherPlace ? null : survey?.siteId ?? null),
+      otherPlace: input.otherPlace, text: input.siteLocation,
+    });
+  } catch (e) {
+    if (e instanceof SiteError) throw new InstallationChallanError(e.message);
+    throw e;
+  }
+  const pinned = input.siteLat != null && input.siteLng != null;
+  // "Another place" with no words: the order's / customer's address only when no pin says otherwise.
+  const siteLocation = place.siteLocation ?? (place.siteId || pinned ? null : fallback ?? cust.addressLine1);
 
   // Assignees must belong to this store - the same relation-scoping every user
   // query in this codebase uses, and the reason `userInScope` exists.
@@ -382,7 +408,10 @@ export async function createInstallationChallan(
         challanNo,
         salesOrderId: input.salesOrderId,
         customerId,
-        siteLocation: site,
+        siteId: place.siteId,
+        siteLocation,
+        siteLat: place.siteLat ?? (pinned ? input.siteLat : null),
+        siteLng: place.siteLng ?? (pinned ? input.siteLng : null),
         status: 'pending',
         stage: input.assigneeIds.length ? 'technician' : 'raised',
         physicalChallanNo: input.physicalChallanNo?.trim() || null,

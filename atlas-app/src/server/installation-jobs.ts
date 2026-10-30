@@ -32,8 +32,8 @@ export interface InstallationSetup {
   items: { id: string; productId: string | null; productName: string; qty: number; coveredBy: { id: string; number: string } | null }[];
   /** Installations already made for this order. */
   installations: { id: string; number: string; stage: string; href: string }[];
-  /** The customer's saved sites that have a location. */
-  sites: { id: string; name: string; address: string | null; lat: number; lng: number }[];
+  /** The customer's active saved sites - pinned or not (30 Oct 2026: a site without a pin was hidden). */
+  sites: { id: string; name: string; address: string | null; lat: number | null; lng: number | null }[];
   /**
    * An older complaint-style installation job still open for this order -
    * those covered the whole order, so nothing more can be raised beside one.
@@ -68,7 +68,7 @@ export async function installationSetup(scope: StoreScope, salesOrderId: string)
   if (!so) throw new ComplaintError('That order is not in your scope.');
   if (!so.partyId || !so.party) throw new ComplaintError('This order has no customer - add one before raising an installation.');
   const sites = await db.partySite.findMany({
-    where: { ...scopeWhere(scope), partyId: so.partyId, isActive: true, latitude: { not: null }, longitude: { not: null } },
+    where: { ...scopeWhere(scope), partyId: so.partyId, isActive: true },
     select: { id: true, name: true, address: true, latitude: true, longitude: true },
     orderBy: { name: 'asc' }, take: FEED_MAX_ROWS,
   });
@@ -86,7 +86,7 @@ export async function installationSetup(scope: StoreScope, salesOrderId: string)
     customerName: so.party.companyName || [so.party.firstName, so.party.lastName].filter(Boolean).join(' '),
     items: so.items.map((i) => ({ ...i, coveredBy: coverOf.get(i.id) ?? null })),
     installations: so.installationChallans.map((c) => ({ id: c.id, number: c.challanNo, stage: c.stage, href: `/services/installations/${c.id}` })),
-    sites: sites.map((x) => ({ id: x.id, name: x.name, address: x.address, lat: Number(x.latitude), lng: Number(x.longitude) })),
+    sites: sites.map((x) => ({ id: x.id, name: x.name, address: x.address, lat: x.latitude === null ? null : Number(x.latitude), lng: x.longitude === null ? null : Number(x.longitude) })),
     openJob: so.installationJobs[0]
       ? { id: so.installationJobs[0].id, number: so.installationJobs[0].complaintNo, href: `/services/complaints/${so.installationJobs[0].id}` }
       : null,
@@ -110,8 +110,9 @@ export async function createInstallationJob(
   }
 
   const site = input.siteId ? setup.sites.find((s) => s.id === input.siteId) : null;
-  if (input.siteId && !site) throw new ComplaintError('That site has no location saved - capture the location instead.');
-  const given = site ? { lat: site.lat, lng: site.lng, source: 'maps_link' as const } : input.location;
+  if (input.siteId && !site) throw new ComplaintError('That site is not one of this customer’s active sites.');
+  // A site with a pin gives it; one without takes the pin captured on the form.
+  const given = site && site.lat !== null && site.lng !== null ? { lat: site.lat, lng: site.lng, source: 'maps_link' as const } : input.location;
   const where = given && Number.isFinite(given.lat) && Number.isFinite(given.lng) ? given : null;
   // Switched off in Field rules: the job is raised without a pin and the
   // technician captures it on arrival, exactly as for a complaint.
@@ -124,20 +125,14 @@ export async function createInstallationJob(
 
   // The order's lines become the challan's - what the technician fits.
   const { createInstallationChallan } = await import('./installation-challans');
+  // The site, its words and its pin through the one rule every job uses (server/sites jobSite).
   const id = await createInstallationChallan(scope, {
     salesOrderId, physicalChallanNo: null, technicianRemark: null, assigneeIds: [],
+    siteId: site?.id ?? null, otherPlace: !site, siteLocation: input.siteNote?.trim() || null,
+    siteLat: where?.lat ?? null, siteLng: where?.lng ?? null,
     note: input.note?.trim() || null,
     items: lines.map((i) => ({ productId: i.productId, productName: i.productName, barcode: null, qty: i.qty, unit: null, salesOrderItemId: i.id })),
   }, userId);
-  await db.installationChallan.update({ where: { id }, data: { priority } });
-  const challan = await db.installationChallan.update({
-    where: { id },
-    data: {
-      // Nothing chosen keeps the order's shipping address the challan was raised with.
-      siteLocation: [site?.name, site?.address, input.siteNote?.trim()].filter(Boolean).join(' - ') || undefined,
-      siteLat: where?.lat ?? null, siteLng: where?.lng ?? null,
-    },
-    select: { challanNo: true },
-  });
+  const challan = await db.installationChallan.update({ where: { id }, data: { priority }, select: { challanNo: true } });
   return { id, challanNo: challan.challanNo, href: `/services/installations/${id}` };
 }

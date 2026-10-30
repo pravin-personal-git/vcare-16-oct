@@ -39,7 +39,7 @@ export default async function InstallationsPage({ searchParams }: {
   const survey = sp.survey
     ? await db.serviceVisit.findFirst({
       where: { id: sp.survey, ...scopeWhere(ctx.scope), reason: 'installation_survey', installationChallanId: null },
-      select: { id: true, siteAddress: true, customer: { select: { id: true, firstName: true, lastName: true, companyName: true, phone: true, addressLine1: true } } },
+      select: { id: true, siteAddress: true, siteId: true, customer: { select: { id: true, firstName: true, lastName: true, companyName: true, phone: true, addressLine1: true } } },
     })
     : null;
 
@@ -68,6 +68,7 @@ export default async function InstallationsPage({ searchParams }: {
           sub: survey.customer.phone, address: survey.customer.addressLine1,
         },
         site: survey.siteAddress ?? survey.customer.addressLine1,
+        siteId: survey.siteId,
       } : null}
     />
   );

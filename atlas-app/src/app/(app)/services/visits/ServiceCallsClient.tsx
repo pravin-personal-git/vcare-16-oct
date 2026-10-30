@@ -14,6 +14,7 @@ import { useRouter } from 'next/navigation';
 import { Modal } from '@/components/ui/Modal';
 import { Button } from '@/components/ui/Button';
 import { CustomerPicker } from '@/components/services/CustomerPicker';
+import { SitePicker, type SiteChoice } from '@/components/services/SitePicker';
 import type { CustomerPick } from '@/app/actions/search-options';
 import { SearchSelect, type SearchOption } from '@/components/ui/SearchSelect';
 import { searchOpenComplaintsAction, searchOpenInstallationsAction } from '@/app/actions/search-options';
@@ -303,7 +304,7 @@ function ScheduleDialog({
   // Survey before installing (27 Oct 2026): any customer, the site, a challan only if there is one.
   const forSurvey = reason.subject === 'customer';
   const [customer, setCustomer] = useState<CustomerPick | null>(null);
-  const [site, setSite] = useState('');
+  const [site, setSite] = useState<SiteChoice>({ siteId: null, otherPlace: false, text: '' });
 
   const pickReason = (key: string) => {
     const next = visitReason(key);
@@ -322,10 +323,11 @@ function ScheduleDialog({
     setError(null);
     if (forSurvey) {
       if (!customer) { setError('Choose the customer.'); return; }
+      if (!site.siteId && !site.otherPlace) { setError('Choose the site.'); return; }
       if (!technicianId) { setError('Choose who is going.'); return; }
       if (!scheduledAt) { setError('Choose the date and time.'); return; }
       startTransition(async () => {
-        const res = await scheduleSurveyVisitAction({ customerId: customer.id, siteAddress: site.trim() || null, challanId: subject?.id ?? null, technicianId, scheduledAt });
+        const res = await scheduleSurveyVisitAction({ customerId: customer.id, siteAddress: site.text.trim() || null, siteId: site.siteId, otherPlace: site.otherPlace, challanId: subject?.id ?? null, technicianId, scheduledAt });
         if (res.error) { setError(res.error); return; }
         onClose();
       });
@@ -394,12 +396,12 @@ function ScheduleDialog({
           <>
             <div className="grid gap-1 text-xs font-medium text-muted-foreground">
               <label htmlFor="visit-customer">Customer</label>
-              <CustomerPicker id="visit-customer" value={customer} onChange={(c) => { setCustomer(c); if (c?.address && !site.trim()) setSite(c.address); }} />
+              <CustomerPicker id="visit-customer" value={customer} onChange={(c) => { setCustomer(c); setSite({ siteId: null, otherPlace: false, text: '' }); }} />
             </div>
-            <label className="grid gap-1 text-xs font-medium text-muted-foreground">
-              Site address
-              <input value={site} onChange={(e) => setSite(e.target.value)} placeholder="Where the technician goes" className={fieldClass} />
-            </label>
+            <div className="grid gap-1 text-xs font-medium text-muted-foreground">
+              <label htmlFor="visit-site">Site</label>
+              <SitePicker key={customer?.id ?? 'none'} id="visit-site" customerId={customer?.id ?? null} value={site} onChange={setSite} />
+            </div>
           </>
         )}
         <div className="grid gap-1 text-xs font-medium text-muted-foreground">
