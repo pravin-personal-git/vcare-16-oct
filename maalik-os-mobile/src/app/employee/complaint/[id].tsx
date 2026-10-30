@@ -30,7 +30,7 @@ export default function ComplaintScreen() {
   const { c } = useTheme();
   // Send anything done offline first, so the screen shows where the job really is.
   const load = useCallback(async () => { await flushJobQueue(); return complaintDetail(id); }, [id]);
-  const { data, setData, error, loading, reload } = useLoad(load, { everyMs: 5000 });
+  const { data, setData, error, loading, reload } = useLoad(load, { everyMs: 30_000 });
   const [busy, setBusy] = useState<string | null>(null);
   const [note, setNote] = useState('');
   const [msg, setMsg] = useState<{ tone: 'success' | 'danger' | 'warning'; text: string } | null>(null);

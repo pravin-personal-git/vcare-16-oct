@@ -18,7 +18,7 @@ import { DateFilter, inDateRange, type DateKey } from '@/components/DateFilter';
 export default function Visits() {
   const { t } = useT();
   const load = useCallback(() => myComplaints(false), []);
-  const { data, error, loading, reload } = useLoad(load, { everyMs: 8000 });
+  const { data, error, loading, reload } = useLoad(load, { everyMs: 60_000 });
 
   /**
    * The clock, held in state and ticked, rather than read during render.

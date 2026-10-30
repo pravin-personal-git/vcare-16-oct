@@ -21,7 +21,7 @@ export default function Installations() {
   const access = useAccess();
   const [scope, setScope] = useState<'mine' | 'all'>('mine');
   const load = useCallback(() => myInstallations(scope === 'all'), [scope]);
-  const { data, error, loading, reload } = useLoad(load, { everyMs: 8000 });
+  const { data, error, loading, reload } = useLoad(load, { everyMs: 60_000 });
 
   // Back from a job: show where it is now, not where it was.
   const [seen, setSeen] = useState(false);

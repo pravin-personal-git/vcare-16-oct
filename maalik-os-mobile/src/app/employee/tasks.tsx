@@ -29,7 +29,7 @@ export default function Tasks() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const load = useCallback(() => myTasks(scope === 'all'), [scope]);
-  const { data, error: loadError, loading, reload } = useLoad(load, { everyMs: 5000 });
+  const { data, error: loadError, loading, reload } = useLoad(load, { everyMs: 60_000 });
 
   /*
     Each list on its own date. An open task is judged on when it is DUE -

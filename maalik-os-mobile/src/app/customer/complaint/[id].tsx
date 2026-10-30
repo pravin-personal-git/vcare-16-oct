@@ -14,7 +14,7 @@ export default function MyComplaint() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const { t } = useT();
   const { c } = useTheme();
-  const { data, error, loading, reload } = useLoad(useCallback(() => customerComplaint(id), [id]), { everyMs: 5000 });
+  const { data, error, loading, reload } = useLoad(useCallback(() => customerComplaint(id), [id]), { everyMs: 30_000 });
   const cm = data?.complaint;
 
   return (

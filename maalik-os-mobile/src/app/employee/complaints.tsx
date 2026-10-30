@@ -28,7 +28,7 @@ export default function Jobs() {
   // "Whole branch" only when the owner allows it (Settings > Roles > Phone app).
   const access = useAccess();
   const load = useCallback(() => myComplaints(scope === 'all'), [scope]);
-  const { data, error, loading, reload } = useLoad(load, { everyMs: 5000 });
+  const { data, error, loading, reload } = useLoad(load, { everyMs: 60_000 });
   // Back from a job: show where each job is now, not where it was (emulator run, 28 Sep 2026).
   const [seen, setSeen] = useState(false);
   useFocusEffect(useCallback(() => {
