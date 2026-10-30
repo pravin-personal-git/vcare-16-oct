@@ -12639,3 +12639,75 @@ model UserAccessOverride {
   @@unique([storeId, userId, moduleKey])
   @@index([userId])
 }
+
+/// A job handed from one technician to another, and why (31 Oct 2026, scorecard).
+/// Credit on the scorecard follows the holder; only "did_not_act" counts against
+/// the one it was taken from. Older handovers are read off AuditEvent, reason unknown.
+model JobReassign {
+  id          String   @id @default(cuid())
+  storeId     String
+  complaintId String
+  fromUserId  String?
+  toUserId    String
+  /// on_leave | busy | skill | customer_asked | did_not_act | unknown
+  reason      String
+  note        String?
+  createdBy   String?
+  createdAt   DateTime @default(now())
+
+  @@index([storeId, createdAt])
+  @@index([complaintId])
+}
+
+/// What a phone reported about itself on one day (IST), every flag seen that day.
+/// CallSyncDevice keeps only the latest state; the scorecard needs the history.
+model DeviceHealthDay {
+  id        String   @id @default(cuid())
+  storeId   String
+  userId    String
+  /// YYYY-MM-DD in IST
+  day       String
+  flags     String[]
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, day])
+  @@index([storeId, day])
+}
+
+/// A manager says a counted miss was not this person's fault. It leaves the score.
+model ScoreClearing {
+  id            String   @id @default(cuid())
+  storeId       String
+  subjectUserId String
+  ruleKey       String
+  refId         String
+  reason        String
+  clearedBy     String
+  createdAt     DateTime @default(now())
+
+  @@unique([subjectUserId, ruleKey, refId])
+  @@index([storeId, createdAt])
+}
+
+/// A reward given or a private manager note, kept on the scorecard's history.
+model ScoreNote {
+  id          String   @id @default(cuid())
+  storeId     String
+  userId      String
+  /// reward | note
+  kind        String
+  body        String
+  amountPaise Int?
+  createdBy   String
+  createdAt   DateTime @default(now())
+
+  @@index([userId, createdAt])
+}
+
+/// The owner's scorecard set-up for a branch: role templates, weights, limits, rules, rewards.
+model ScorecardSettings {
+  storeId   String   @id
+  settings  Json
+  updatedBy String?
+  updatedAt DateTime @updatedAt
+}

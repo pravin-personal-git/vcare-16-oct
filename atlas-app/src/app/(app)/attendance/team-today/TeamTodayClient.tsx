@@ -92,6 +92,7 @@ export function TeamTodayClient({ rows: allRows, canLocate, canExport, views }: 
                     {r.status === 'on_shift' && r.firstInAt && `In since ${fmtClock(r.firstInAt)}${r.workedMinutes !== null ? ` · ${formatWorked(r.workedMinutes)} so far` : ''}`}
                     {r.status === 'done' && r.firstInAt && `${fmtClock(r.firstInAt)} - ${r.lastOutAt ? fmtClock(r.lastOutAt) : '?'} · ${formatWorked(r.workedMinutes)}`}
                     {r.status !== 'not_marked' && r.source && ` · via ${SOURCE_LABEL[r.source] ?? r.source}`}
+                    {canLocate && typeof r.distanceKm === 'number' && ` · ${r.distanceKm} km today`}
                     {canLocate && r.lastFix && (
                       <>
                         {' · '}

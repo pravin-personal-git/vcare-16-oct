@@ -41,7 +41,7 @@ const PREFIXES: [string, SellableModule][] = [
   ['/purchase', 'Purchase'], ['/purchase-return', 'Purchase'],
   // HRM
   ['/hrm', 'HRM'], ['/attendance', 'HRM'], ['/employee/attendance', 'HRM'], ['/holiday', 'HRM'], ['/hierarchy', 'HRM'],
-  ['/assets', 'HRM'], ['/helpdesk', 'HRM'], ['/departments', 'HRM'], ['/settings/attendance', 'HRM'],
+  ['/assets', 'HRM'], ['/helpdesk', 'HRM'], ['/departments', 'HRM'], ['/settings/attendance', 'HRM'], ['/settings/scorecards', 'HRM'],
   ['/settings/employees', 'HRM'],
   ['/hrm/employee-config', 'HRM Configurations'],
   // Financial reports

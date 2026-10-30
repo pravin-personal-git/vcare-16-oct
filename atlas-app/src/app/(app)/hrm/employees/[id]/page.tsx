@@ -8,6 +8,9 @@ import { SectionCard, SummaryRow } from '@/components/ui/Layout';
 import { DetailHeader } from '@/components/document/DetailHeader';
 import { CustomerLink } from '@/components/document/CustomerLink';
 import { formatCurrency } from '@/lib/format';
+import { scorecardFor } from '@/server/scorecard';
+import { Scorecard } from '@/components/people/Scorecard';
+import { PERIODS, type PeriodKey } from '@/lib/scorecard/period';
 
 /**
  * ONE EMPLOYEE (G-37, 10 Oct 2026). A person's name - on a job, a payslip,
@@ -18,8 +21,10 @@ const fmtDate = (d: Date | null | undefined) =>
   d ? new Date(d).toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', year: 'numeric' }) : '-';
 const words = (s: string) => s.replace(/_/g, ' ');
 
-export default async function EmployeePage({ params }: { params: Promise<{ id: string }> }) {
+export default async function EmployeePage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ period?: string }> }) {
   const { id } = await params;
+  const sp = await searchParams;
+  const period: PeriodKey = sp.period && sp.period in PERIODS ? (sp.period as PeriodKey) : 'month';
   const ctx = await requireContext();
   const storeIds = ctx.scope.kind === 'single' ? [ctx.scope.storeId] : ctx.stores.map((s) => s.id);
   const e = await employeeView(storeIds, id, { canSeePay: canOpenRoute('/hrm/payroll', ctx.permissions) });
@@ -27,6 +32,11 @@ export default async function EmployeePage({ params }: { params: Promise<{ id: s
   // Whose attendance and leave this person sees (B4 step 4).
   await guardPersonPage(ctx, id, `/hrm/employees/${id}`);
   const row = 'flex items-center justify-between gap-2 rounded-lg px-2 py-1.5 text-sm hover:bg-muted';
+  // The scorecard (31 Oct 2026): a failure there must not take the person's page down with it.
+  const scorecard = await scorecardFor(ctx.scope, storeIds, storeIds[0] ?? '', id, period).catch((err) => {
+    console.error('[scorecard] failed', err);
+    return null;
+  });
   const a = e.attendance;
 
   return (
@@ -45,6 +55,8 @@ export default async function EmployeePage({ params }: { params: Promise<{ id: s
         backHref="/settings/employees"
         backLabel="Employees"
       />
+
+      {scorecard && <div className="mb-4"><Scorecard view={scorecard} canManage={ctx.permissions.has('hrm.edit') && id !== ctx.user.id} basePath={`/hrm/employees/${id}`} /></div>}
 
       <div className="grid gap-4 lg:grid-cols-3">
         <div className="grid content-start gap-4 lg:col-span-2">

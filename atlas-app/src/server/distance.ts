@@ -160,3 +160,25 @@ export async function distanceForUsers(
   for (const [userId, parts] of perUser) out.set(userId, sumDistances(parts));
   return out;
 }
+
+/**
+ * One person, each business day of a window - the scorecard's last 14 days
+ * (31 Oct 2026). One read for all the points, like `distanceForUsers`; null when
+ * this person is not tracked.
+ */
+export async function distancePerDay(
+  scope: StoreScope, userId: string, storeIds: string[], from: Date, to: Date,
+): Promise<Map<string, DistanceResult> | null> {
+  if (!(await isTracked(userId, storeIds))) return null;
+  const rows = await db.attendanceEvent.findMany({
+    where: { ...scopeWhere(scope), userId, recordedAt: { gte: from, lt: to } },
+    orderBy: { recordedAt: 'asc' },
+    select: { lat: true, lng: true, accuracyM: true, mocked: true, recordedAt: true },
+  });
+  const byDay = new Map<string, TrackPoint[]>();
+  for (const r of rows) {
+    const key = businessDay(r.recordedAt);
+    byDay.set(key, [...(byDay.get(key) ?? []), { lat: Number(r.lat), lng: Number(r.lng), accuracyM: r.accuracyM, mocked: r.mocked, at: r.recordedAt.getTime() }]);
+  }
+  return new Map([...byDay].map(([day, points]) => [day, distanceOf(points, DEFAULT_DISTANCE_RULE)]));
+}

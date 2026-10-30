@@ -107,6 +107,8 @@ export async function checkInDevice(token: string, report: CheckInReport, ip: st
     });
     await logEvents(tx, d, kinds, skew !== null && kinds.includes('clock_changed') ? { skewMs: skew } : undefined);
   });
+  // The day's phone health for the scorecard (31 Oct 2026): every flag seen today, kept.
+  await recordHealthDay(d.storeId, d.userId, now, next ?? prev, skew).catch((e) => console.error('[device] health day failed', e));
 
   return { serverTime: now.toISOString(), mustRepair: false, revoked: false };
 }
@@ -144,3 +146,26 @@ export async function checkPhoneForLogin(userId: string, deviceToken: string | n
 }
 
 export type { PermissionState };
+
+/**
+ * One row per person per IST day with every flag the phone reported that day
+ * (scorecard Phone pillar, 31 Oct 2026). A flag once seen stays for the day:
+ * a phone that had location off at 11 and on at 4 had a bad day.
+ */
+async function recordHealthDay(storeId: string, userId: string, now: Date, p: PermissionState | null, skew: number | null) {
+  const flags: string[] = [];
+  if (p) {
+    if (p.location !== 'always' || !p.locationServices) flags.push('location_off');
+    if (!p.callLog || !p.notifications) flags.push('permissions_missing');
+    if (!p.batteryUnrestricted) flags.push('battery_restricted');
+  }
+  if (clockSkewed(skew)) flags.push('clock_changed');
+  const day = new Date(now.getTime() + 330 * 60_000).toISOString().slice(0, 10);
+  const had = await db.deviceHealthDay.findUnique({ where: { userId_day: { userId, day } }, select: { flags: true } });
+  const all = [...new Set([...(had?.flags ?? []), ...flags])];
+  await db.deviceHealthDay.upsert({
+    where: { userId_day: { userId, day } },
+    create: { storeId, userId, day, flags: all },
+    update: { flags: all },
+  });
+}

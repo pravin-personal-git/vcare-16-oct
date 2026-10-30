@@ -25,6 +25,7 @@ import {
 import { searchCustomersAction } from '@/app/actions/search-options';
 import type { ComplaintRow, ComplaintFieldConfigRow } from '@/server/complaints';
 import { TechnicianOptions } from '@/components/services/TechnicianOptions';
+import { ReassignReason } from '@/components/services/ReassignReason';
 import { OFFICE_LABEL } from '@/lib/job-flow';
 import { contactActions } from '@/lib/quick-actions';
 import { complaintBlocker, stdRequired, stdShown, type FieldSetup } from '@/lib/custom-fields';
@@ -73,11 +74,16 @@ export function ComplaintsClient({
   // The row dropdown used to drop a failed save silently (27 Sep 2026).
   const [assignError, setAssignError] = useState<string | null>(null);
 
-  const setTechnician = (complaintId: string, technicianId: string) => {
+  // Moving a job off a technician asks why (scorecard, 31 Oct 2026).
+  const [handover, setHandover] = useState<{ complaintId: string; technicianId: string } | null>(null);
+  const setTechnician = (complaintId: string, technicianId: string, reason?: string) => {
     if (!technicianId) return;
+    const holder = rows.find((x) => x.id === complaintId)?.assignedTechnicianId;
+    if (holder && holder !== technicianId && !reason) { setHandover({ complaintId, technicianId }); return; }
     setAssignError(null);
+    setHandover(null);
     startTransition(async () => {
-      const r = await assignTechnicianAction(complaintId, technicianId);
+      const r = await assignTechnicianAction(complaintId, technicianId, reason);
       if (r.error) setAssignError(r.error);
       router.refresh();
     });
@@ -210,6 +216,10 @@ export function ComplaintsClient({
         <p role="alert" className="mb-3 rounded-lg border border-danger/30 bg-danger/5 px-3 py-2 text-sm text-on-tint-danger">
           {assignError}
         </p>
+      )}
+      {handover && (
+        <ReassignReason toName={technicians.find((t) => t.id === handover.technicianId)?.fullName ?? 'another technician'} busy={pending}
+          onClose={() => setHandover(null)} onConfirm={(reason) => setTechnician(handover.complaintId, handover.technicianId, reason)} />
       )}
 
       <DataGrid

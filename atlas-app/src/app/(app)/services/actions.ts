@@ -230,10 +230,10 @@ export async function createComplaintAction(input: CreateComplaintInput): Promis
   }
 }
 
-export async function assignTechnicianAction(complaintId: string, technicianId: string): Promise<ActionState> {
+export async function assignTechnicianAction(complaintId: string, technicianId: string, reason?: string | null): Promise<ActionState> {
   return guard(async () => {
     const ctx = await requireContext();
-    await assignTechnician(ctx.scope, complaintId, technicianId, ctx.user.id);
+    await assignTechnician(ctx.scope, complaintId, technicianId, ctx.user.id, reason);
   });
 }
 

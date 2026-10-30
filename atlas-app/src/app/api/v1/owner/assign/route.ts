@@ -34,7 +34,7 @@ export async function POST(req: Request) {
     }
     if (!ctx.permissions.has('complaints.edit')) throw new V1Error('You cannot assign complaints.', 403);
     if (ids.length !== 1) throw new V1Error('Choose one technician.');
-    await assignTechnician(ctx.scope, id, ids[0]!, ctx.user.id);
+    await assignTechnician(ctx.scope, id, ids[0]!, ctx.user.id, typeof b.reason === 'string' ? b.reason : null);
     return { ok: true, message: 'Assigned.' };
   });
 }

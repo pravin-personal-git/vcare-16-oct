@@ -26,6 +26,8 @@ import { autoCloseStaleInScope } from './shifts';
  */
 
 export interface TeamRow {
+  /** Kilometres on the road today (31 Oct 2026): a floor, readings accurate to 50 m only; null = not tracked. */
+  distanceKm?: number | null;
   userId: string;
   name: string;
   status: 'on_shift' | 'done' | 'not_marked';

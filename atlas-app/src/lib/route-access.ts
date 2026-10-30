@@ -119,6 +119,7 @@ export const ROUTE_ACCESS: Record<string, RouteRule> = {
   // Attendance & people
   '/attendance': V.attendance,
   '/settings/attendance': ['attendance.edit', 'hrm.edit', 'settings.edit'],
+  '/settings/scorecards': ['hrm.edit', 'settings.edit'],
   '/holiday/leave-types': [...V.hrm, 'attendance.edit'],
   '/hrm/payroll': V.payroll,
   '/hrm/salary': V.payroll,

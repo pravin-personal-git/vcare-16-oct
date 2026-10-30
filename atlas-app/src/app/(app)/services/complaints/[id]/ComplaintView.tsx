@@ -37,6 +37,7 @@ import { DetailHeader } from '@/components/document/DetailHeader';
 import { ActionBar } from '@/components/document/ActionBar';
 import { customerLinkAction } from '../../actions';
 import { QuickVisitDialog } from '@/components/services/QuickVisitDialog';
+import { ReassignReason } from '@/components/services/ReassignReason';
 import { RMA_OUTCOME_LABEL, SUPPLIER_ANSWER_LABEL, type RmaOutcome, type SupplierAnswer } from '@/lib/rma';
 
 /**
@@ -163,6 +164,7 @@ export function ComplaintView({ detail: d, coverage, technicians, legacyTechnici
   // Only an item of ours whose warranty is running can have it voided.
   const voidable = liveItems.filter((i) => i.ours && i.cover.parts.free && i.voidStatus !== 'requested' && i.voidStatus !== 'approved');
 
+  const [handover, setHandover] = useState<string | null>(null);
   const run = (fn: () => Promise<{ error?: string } | void>) => start(async () => {
     setError(null);
     const r = await fn();
@@ -278,6 +280,9 @@ export function ComplaintView({ detail: d, coverage, technicians, legacyTechnici
             run(async () => { const r = await completeVisitAction(v.id, outcome, override); if (!r.error) setNotice('Visit marked completed.'); return r; });
           }} />
       )}
+      {handover && <ReassignReason toName={technicians.find((t) => t.id === handover)?.fullName ?? 'another technician'} busy={pending}
+        onClose={() => setHandover(null)}
+        onConfirm={(reason) => { const to = handover; setHandover(null); run(() => assignTechnicianAction(d.id, to, reason)); }} />}
       {raising && parts && <RaiseChallan catalogue={parts.catalogue} busy={pending} onClose={() => setRaising(false)}
         onSave={(input) => { setRaising(false); run(() => raiseJobChallanAction(d.id, input)); }} />}
       {adding && <AddItems customerId={d.customerId} busy={pending} onClose={() => setAdding(false)}
@@ -385,7 +390,13 @@ export function ComplaintView({ detail: d, coverage, technicians, legacyTechnici
                 Technician
                 <select
                   id="complaint-technician" disabled={pending} value={d.assignedTechnicianId ?? ''}
-                  onChange={(e) => e.target.value && run(() => assignTechnicianAction(d.id, e.target.value))}
+                  onChange={(e) => {
+                    const to = e.target.value;
+                    if (!to) return;
+                    // Moving it off a technician asks why (scorecard, 31 Oct 2026).
+                    if (d.assignedTechnicianId && d.assignedTechnicianId !== to) setHandover(to);
+                    else run(() => assignTechnicianAction(d.id, to));
+                  }}
                   className="h-9 rounded-lg border border-border bg-card px-2 text-sm text-foreground outline-none focus:border-brand"
                 >
                   <option value="">Not assigned</option>

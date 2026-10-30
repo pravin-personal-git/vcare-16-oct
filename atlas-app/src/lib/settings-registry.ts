@@ -425,6 +425,13 @@ export const SETTINGS_ENTRIES: readonly SettingsEntry[] = [
     keywords: ['shift', 'holiday', 'leave', 'week off', 'roster'],
   },
   {
+    key: 'scorecards', label: 'Scorecards', section: 'people',
+    group: 'Your organisation',
+    route: '/settings/scorecards', permission: 'settings.edit',
+    hint: 'How technicians and office staff are scored: weights, limits, hygiene and reward rules.',
+    keywords: ['scorecard', 'performance', 'kpi', 'reward', 'hygiene', 'mistake'],
+  },
+  {
     key: 'clock-in-rules', label: 'Clock-in Rules', section: 'attendance',
     group: 'Time and place',
     route: '/settings/attendance/clock-in-rules', permission: 'attendance.edit',

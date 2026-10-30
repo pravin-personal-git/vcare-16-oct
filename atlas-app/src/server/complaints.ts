@@ -20,6 +20,7 @@ import { customerLabel, findTransition, transitionError, SET_BY_THEIR_OWN_ACTION
 import { visitSubject } from '@/lib/visit-reasons';
 import { assertActionAllowed } from './flow-gate';
 import { jobEvent } from './job-notify';
+import { REASSIGN_LABEL, REASSIGN_REASONS, type ReassignReason } from '@/lib/scorecard/settings';
 
 /** Statuses before any work - reassigning here means the new technician must accept. */
 const PRE_WORK: string[] = ['received', 'assigned', 'accepted', 'scheduled'];
@@ -561,12 +562,22 @@ export async function createComplaint(scope: StoreScope, input: CreateComplaintI
   });
 }
 
-export async function assignTechnician(scope: StoreScope, complaintId: string, technicianId: string, userId: string | null) {
+export async function assignTechnician(
+  scope: StoreScope, complaintId: string, technicianId: string, userId: string | null,
+  /** Why it moves from the technician who has it (scorecard, 31 Oct 2026); none = not recorded. */
+  reason?: string | null,
+) {
   const storeId = scopeForWrite(scope);
   const complaint = await db.complaint.findFirst({ where: { id: complaintId, storeId } });
   if (!complaint) throw new ComplaintError('That complaint is not in your scope.');
+  const from = complaint.assignedTechnicianId;
+  const why = (REASSIGN_REASONS as readonly string[]).includes(reason ?? '') ? reason! : 'unknown';
 
   await db.$transaction(async (tx) => {
+    // A handover, not a first assignment: who had it and why, so credit follows the holder.
+    if (from && from !== technicianId) {
+      await tx.jobReassign.create({ data: { storeId, complaintId, fromUserId: from, toUserId: technicianId, reason: why, createdBy: userId } });
+    }
     await tx.complaint.update({
       where: { id: complaintId },
       // Before work starts, a (new) technician must accept it (job-flow).
@@ -577,6 +588,7 @@ export async function assignTechnician(scope: StoreScope, complaintId: string, t
     });
     await logActivity(tx, complaintId, 'assignment', userId, {
       statusFrom: complaint.status, statusTo: PRE_WORK.includes(complaint.status) ? 'assigned' : complaint.status,
+      ...(from && from !== technicianId ? { body: `Reassigned - ${REASSIGN_LABEL[why as ReassignReason]}.` } : {}),
     });
   });
   await jobEvent(complaintId, 'assigned');
