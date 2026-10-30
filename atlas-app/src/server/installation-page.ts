@@ -2,6 +2,7 @@ import 'server-only';
 import { db } from './db';
 import { scopeForWrite, scopeWhere, userInScope, type StoreScope } from './store-scope';
 import { InstallationChallanError, setInstallationChallanStatus } from './installation-challans';
+import { applyMovements, type MovementInput } from './stock';
 import { FEED_MAX_ROWS, LIST_MAX_ROWS } from '@/lib/list-limits';
 import { deriveStage, normaliseStage, stageLabel, type InstallStage } from '@/lib/installation-stages';
 
@@ -522,9 +523,29 @@ export async function billInstallation(
   const units = (await db.installationChallanItem.findMany({ where: { challanId: id, stockUnitId: { not: null } }, select: { stockUnitId: true } }))
     .map((i) => i.stockUnitId!).filter(Boolean);
   if (units.length) await db.stockUnit.updateMany({ where: { id: { in: units }, invoiceId: null }, data: { invoiceId: invoice.id } });
+  await stockOutWithoutOrder(c.storeId, id, invoice.id, userId);
   await log(c.storeId, id, userId, 'Billed', `Billed on ${invoice.invoiceNo} (draft - issue it from Invoices).`);
   await closeJob(c.storeId, id, userId);
   return { id: invoice.id, invoiceNo: invoice.invoiceNo };
+}
+
+/**
+ * An installation with no sales order never had a dispatch to take its goods
+ * out (30 Oct 2026, Vcare: billed cameras still read "in stock"). Its bill does:
+ * every line leaves to the customer, a serial line as the unit scanned on it.
+ * With an order, its GDN already moved them - nothing here.
+ */
+async function stockOutWithoutOrder(storeId: string, id: string, invoiceId: string, userId: string) {
+  const ch = await db.installationChallan.findUnique({
+    where: { id },
+    select: { salesOrderId: true, customerId: true, challanNo: true, items: { where: { productId: { not: null } }, select: { productId: true, qty: true, qtyReturned: true, stockUnitId: true } } },
+  });
+  if (!ch || ch.salesOrderId) return;
+  const moves: MovementInput[] = ch.items.filter((i) => i.qty - i.qtyReturned > 0).map((i) => ({
+    productId: i.productId!, qty: -(i.qty - i.qtyReturned), reason: 'job_issue', refType: 'InstallationChallan', refId: id, refNo: ch.challanNo,
+    partyId: ch.customerId, invoiceId, ...(i.stockUnitId ? { stockUnitIds: [i.stockUnitId] } : {}),
+  }));
+  if (moves.length) await db.$transaction((tx) => applyMovements(tx, storeId, userId, moves));
 }
 
 /** Don't bill, with a reason - goodwill, a mistake on our side. Closes the job. */
