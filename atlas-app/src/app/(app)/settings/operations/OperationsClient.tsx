@@ -226,12 +226,12 @@ function AccessPanel({ people, meId }: { people: Person[]; meId: string }) {
 
       {msg && <p role={msg.ok ? 'status' : 'alert'} className={`rounded-xl px-4 py-2.5 text-sm ${msg.ok ? 'bg-success/10 text-on-tint-success' : 'bg-danger/10 text-on-tint-danger'}`}>{msg.text}</p>}
       {grid ? <Matrix people={people} cur={cur} base={base} onOpen={(id) => { setPick(id); setGrid(false); }} /> : (
-        <div className="grid gap-4 lg:grid-cols-[300px_1fr]">
+        <div className="grid gap-4 xl:grid-cols-[300px_1fr]">
           <aside className="rounded-2xl bg-card p-3" aria-label="Log">
             <label htmlFor="ops-q" className="sr-only">Naam dhoondho</label>
             <input id="ops-q" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Naam dhoondho…"
               className="h-10 w-full rounded-full bg-muted/70 px-4 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-brand" />
-            <ul className="thin-scroll mt-2 max-h-[560px] space-y-0.5 overflow-y-auto">
+            <ul className="thin-scroll mt-2 max-h-[240px] space-y-0.5 xl:max-h-[560px] overflow-y-auto">
               {people.filter((p) => p.name.toLowerCase().includes(q.toLowerCase())).map((p) => {
                 const t = tally(p.id);
                 return (
@@ -255,7 +255,7 @@ function AccessPanel({ people, meId }: { people: Person[]; meId: string }) {
             <section className="space-y-3" aria-label={person.name}>
               <div className="flex flex-wrap items-center gap-3 rounded-2xl bg-card px-5 py-4">
                 <span className="grid h-12 w-12 place-items-center rounded-full bg-brand/10 text-sm font-bold text-on-tint-brand">{initials(person.name)}</span>
-                <div className="min-w-0 flex-1">
+                <div className="min-w-[14rem] flex-1">
                   <h2 className="text-lg font-semibold">{person.name}</h2>
                   <p className="text-xs text-muted-foreground">{person.id === meId
                     ? 'Yeh aap hain - apni access khud nahi badal sakte, kisi aur owner se karwaiye.'
