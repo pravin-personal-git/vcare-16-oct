@@ -42,15 +42,23 @@ const STOP = new Set(`kaise kese kaisey kaese kese kesay kya kia kyu kyun kab ka
 ka ki ke ko me mein mai main se par pe pr ek aur ya bhi to toh tha thi the na mat
 karu karun kare karein karna karo kar krna krne kru kre krein karte karta karti karke krke
 how what where when why which who is are am do does did can could should would will i my me we our you your the a an to of in on for
-it this that with from at by be please plz pls batao bataiye bolo samjhao help madad chahiye chahie`.split(/\s+/));
+it this that with from at by be please plz pls batao bataiye bolo samjhao help madad chahiye chahie
+gaya gayi gaye raha rahe rahi rha rhe hua hui sakta sakte sakti jata jaata jati`.split(/\s+/));
+
+/**
+ * Action and mood words: "naya", "galat", "nahi" are in half of all questions,
+ * so on their own they must not pick a guide. "naya user kaise banaye" was
+ * answered with "Nayi enquiry" on "naya" + "banaye" alone (30 Oct 2026).
+ */
+const GENERIC = new Set(['create', 'error', 'find', 'delete', 'assign', 'old']);
 
 /** Spellings and synonyms -> one word, so "chalan", "GDN" and "parts" meet "challan". */
 const SAME: [string, string[]][] = [
   ['challan', ['chalan', 'chalaan', 'challaan', 'challn', 'gdn', 'parts', 'part', 'saman', 'samaan', 'maal']],
   ['create', ['banana', 'banaye', 'banayen', 'banau', 'banao', 'bnana', 'bnaye', 'bnau', 'banane', 'raise', 'raised', 'new', 'naya', 'nayi', 'naye', 'add', 'jodo', 'jode', 'jodna', 'make', 'banta', 'generate', 'create', 'creating', 'nikalna', 'nikale', 'kholna']],
-  ['return', ['wapas', 'vapas', 'wapis', 'vapis', 'lautana', 'returned', 'back', 'receive', 'unused', 'bacha']],
+  ['return', ['wapas', 'vapas', 'wapis', 'vapis', 'lautana', 'returned', 'back', 'unused', 'bacha']],
   ['invoice', ['bill', 'bil', 'billing', 'invoices', 'inv']],
-  ['payment', ['paisa', 'paise', 'paymnet', 'pyment', 'payments', 'receipt', 'jama', 'received', 'amount', 'collection', 'udhaar', 'baki', 'baaki', 'due', 'outstanding']],
+  ['payment', ['paisa', 'paise', 'paymnet', 'pyment', 'payments', 'jama', 'received', 'amount', 'collection', 'udhaar', 'baki', 'baaki', 'due', 'outstanding']],
   ['enquiry', ['inquiry', 'enquiries', 'enq', 'lead', 'leads', 'puchtach', 'poochtach']],
   ['complaint', ['complain', 'complaints', 'shikayat', 'cmp', 'comp', 'ticket', 'service', 'repair']],
   ['serial', ['serials', 'sr', 'srno', 'barcode', 'imei']],
@@ -65,7 +73,7 @@ const SAME: [string, string[]][] = [
   ['assign', ['assigned', 'allot', 'dena', 'do']],
   ['error', ['problem', 'issue', 'galti', 'galat', 'wrong', 'nahi', 'nhi', 'ni', 'unable', 'cant', 'cannot', 'not', 'fail', 'failed', 'stuck', 'chal', 'khul']],
   ['delete', ['hatana', 'hatao', 'remove', 'cancel', 'withdraw']],
-  ['find', ['search', 'dhundhna', 'dhoondhna', 'dhundho', 'khojna', 'locate', 'pata']],
+  ['find', ['search', 'dhundhna', 'dhoondhna', 'dhundho', 'dhundhe', 'dhoondhe', 'dhundhu', 'dhoondho', 'khojna', 'locate', 'pata']],
   ['old', ['purana', 'purane', 'puraana', 'previous', 'legacy', 'mongo']],
   ['login', ['password', 'signin', 'sign', 'locked', 'lock']],
 ];
@@ -103,17 +111,22 @@ export function search(query: string, library: HelpArticle[], limit = 3): Hit[] 
   const q = words(query);
   if (!q.length) return [];
   const raw = query.toLowerCase().trim();
+  const topical = q.filter((w) => !GENERIC.has(w));
   const hits: Hit[] = [];
   for (const article of library) {
     const title = words(article.q);
     const rest = words([...article.also, article.area].join(' '));
+    const found = (w: string) => title.some((t) => near(w, t)) || rest.some((t) => near(w, t));
+    // The question names a subject; a guide that shares none of it is not an answer.
+    const onTopic = topical.length === 0 || topical.some(found);
     let score = 0;
     for (const w of q) {
       if (title.some((t) => near(w, t))) score += 3;
       else if (rest.some((t) => near(w, t))) score += 2;
     }
+    if (!onTopic) score = 0;
     // Every question word found: a clear answer, not a partial one.
-    if (q.every((w) => title.some((t) => near(w, t)) || rest.some((t) => near(w, t)))) score += 2;
+    if (q.every(found)) score += 2;
     // An error pasted as it appeared on screen.
     if (raw.length > 12 && article.also.some((a) => a.length > 12 && (a.toLowerCase().includes(raw) || raw.includes(a.toLowerCase())))) score += 10;
     if (score > 0) hits.push({ article, score: score / Math.sqrt(q.length + 1) });
