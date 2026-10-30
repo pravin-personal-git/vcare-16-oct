@@ -7,21 +7,23 @@ import { Badge } from '@/components/ui/Layout';
 import { OP_DOCUMENTS, OP_GROUPS, type OpDocument } from '@/lib/operations-catalogue';
 import { ROLE_MODULES, type ModuleLevel, type RoleModule } from '@/lib/role-modules';
 import { initials } from '@/lib/revenue';
+import { requestType } from '@/lib/approval-rules';
 import type { PersonAccess } from '@/server/user-access';
-import { saveAccessAction } from './actions';
+import { saveAccessAction, saveApprovalsAction } from './actions';
 
 /**
  * Operations & approvals (30 Oct 2026). Each person's access as plain
- * switches - saved. Approvals for every action on every document - shown,
- * saved in the next step (plan step B).
+ * switches, and an approval switch on every action the engine can hold - both
+ * saved. Actions it cannot hold yet are listed, locked (plan step C).
  */
 
 type Person = PersonAccess;
 const OWNER_LOCKED = ['settings', 'users'];
-type Approver = 'owner' | 'manager' | 'role';
+type Approver = 'owner' | 'manager' | 'keep';
 type Access = { view: boolean; edit: boolean; approve: boolean };
+export type SavedApproval = { on: boolean; approver: Approver; thresholdPaise: number | null };
 
-const APPROVER: Record<Approver, string> = { owner: 'Owner', manager: 'Uska manager', role: 'Senior Manager' };
+const APPROVER: Record<Approver, string> = { owner: 'Owner', manager: 'Uska manager', keep: 'Approval Rules jaisa' };
 
 function Switch({ on, onChange, label, disabled }: { on: boolean; onChange: (v: boolean) => void; label: string; disabled?: boolean }) {
   return (
@@ -35,7 +37,7 @@ function Switch({ on, onChange, label, disabled }: { on: boolean; onChange: (v: 
 const fromLevel = (l: ModuleLevel): Access => ({ view: l !== 'none', edit: l === 'edit' || l === 'approve', approve: l === 'approve' });
 const same = (a: Access, b: Access) => a.view === b.view && a.edit === b.edit && a.approve === b.approve;
 
-export function OperationsClient({ rules, people, meId }: { rules: Record<string, boolean>; people: Person[]; meId: string }) {
+export function OperationsClient({ rules, people, meId }: { rules: Record<string, SavedApproval>; people: Person[]; meId: string }) {
   const [tab, setTab] = useState<'approvals' | 'access'>('approvals');
   return (
     <div className="mx-auto max-w-6xl space-y-4 pb-24">
@@ -53,70 +55,73 @@ export function OperationsClient({ rules, people, meId }: { rules: Record<string
           ))}
         </div>
       </header>
-      {tab === 'approvals' && (
-        <p className="flex items-center gap-2 rounded-xl bg-warning/10 px-4 py-2.5 text-sm text-on-tint-warning">
-          <Icon name="info" className="h-4 w-4 shrink-0" />Approvals ke switch abhi save nahi hote - yeh agla kadam hai. &ldquo;Kaun kya kar sakta hai&rdquo; save hota hai.
-        </p>
-      )}
       {tab === 'approvals' ? <Approvals rules={rules} /> : <AccessPanel people={people} meId={meId} />}
     </div>
   );
 }
 
 // ================================================================ approvals
-function Approvals({ rules }: { rules: Record<string, boolean> }) {
-  const all = OP_DOCUMENTS.flatMap((d) => d.actions.map((a) => ({ d, a, id: `${d.key}.${a.key}` })));
-  // What the business asked for: everything waits for a yes, the owner says it.
-  const [on, setOn] = useState<Record<string, boolean>>(() => Object.fromEntries(all.map((x) => [x.id, true])));
-  const [who, setWho] = useState<Record<string, Approver>>({});
-  const [def, setDef] = useState<Approver>('owner');
-  const today = (type?: string) => (!type ? 'new' : rules[type] === true ? 'on' : rules[type] === false ? 'off' : 'unset');
-  const count = {
-    total: all.length,
-    on: all.filter((x) => on[x.id]).length,
-    liveToday: all.filter((x) => today(x.a.type) === 'on').length,
-    toBuild: all.filter((x) => !x.a.type).length,
-  };
-  const setAll = (v: boolean) => setOn(Object.fromEntries(all.map((x) => [x.id, v])));
+type Row = { d: OpDocument; a: OpDocument['actions'][number] };
+const sameApproval = (a: SavedApproval, b: SavedApproval) => a.on === b.on && a.approver === b.approver && a.thresholdPaise === b.thresholdPaise;
+const ROWS: Row[] = OP_DOCUMENTS.flatMap((d) => d.actions.map((a) => ({ d, a })));
+const TYPED = ROWS.flatMap((x) => (x.a.type ? [x.a.type] : []));
+
+/** No saved rule: what happens today - people requests go up the reporting line, the rest go through. */
+function unsaved(type: string): SavedApproval {
+  const t = requestType(type);
+  return { on: t?.legacy === 'hierarchy', approver: t?.group === 'People' ? 'manager' : 'owner', thresholdPaise: null };
+}
+
+function Approvals({ rules }: { rules: Record<string, SavedApproval> }) {
+  const router = useRouter();
+  const [saving, startSave] = useTransition();
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const base = useMemo(() => Object.fromEntries(TYPED.map((t) => [t, rules[t] ?? unsaved(t)])), [rules]) as Record<string, SavedApproval>;
+  const [cur, setCur] = useState(base);
+  const set = (type: string, patch: Partial<SavedApproval>) => setCur((x) => ({ ...x, [type]: { ...x[type], ...patch } }));
+  const dirty = TYPED.filter((t) => !sameApproval(cur[t], base[t]));
+  const setAll = (on: boolean) => setCur((x) => Object.fromEntries(Object.entries(x).map(([k, v]) => [k, { ...v, on }])));
+  const save = () => startSave(async () => {
+    const r = await saveApprovalsAction(dirty.map((t) => ({ type: t, ...cur[t] })));
+    if ('error' in r) { setMsg({ ok: false, text: r.error }); return; }
+    setMsg({ ok: true, text: `${r.saved} niyam save ho gaye. Agle kaam se lagu honge.` });
+    router.refresh();
+  });
 
   return (
     <div className="space-y-4">
-      <section className="grid gap-3 sm:grid-cols-4">
+      <section className="grid gap-3 sm:grid-cols-3">
         {[
-          ['Kul kaam', count.total, 'har document ka har kaam'],
-          ['Approval on', count.on, 'is page pe'],
-          ['Aaj sach mein lagta hai', count.liveToday, 'Vcare ke saved niyam'],
-          ['Naya banana padega', count.toBuild, 'engine abhi rok nahi sakta'],
-        ].map(([l, n, s]) => (
+          ['Approval on', TYPED.filter((t) => cur[t].on).length, `${TYPED.length} kaam mein se jo abhi roke ja sakte hain`],
+          ['Save baaki', dirty.length, 'badle, par save nahi kiye'],
+          ['Agla kadam', ROWS.length - TYPED.length, 'kaam jo abhi roke nahi ja sakte'],
+        ].map(([l, n, sub]) => (
           <div key={l as string} className="rounded-2xl bg-card px-5 py-4">
             <p className="text-xs text-muted-foreground">{l}</p>
             <p className="mt-1 font-num text-num tabular-nums">{n}</p>
-            <p className="text-xs text-muted-foreground">{s}</p>
+            <p className="text-xs text-muted-foreground">{sub}</p>
           </div>
         ))}
       </section>
 
-      <section className="flex flex-wrap items-center gap-3 rounded-2xl bg-card px-5 py-3.5">
+      <section className="sticky top-2 z-10 flex flex-wrap items-center gap-3 rounded-2xl bg-card px-5 py-3.5 shadow-raised">
         <span className="text-sm font-semibold">Sab ek saath:</span>
-        <button type="button" onClick={() => setAll(true)} className="h-8 rounded-full bg-foreground px-3 text-xs font-semibold text-background transition active:scale-[0.98]">Sab pe approval</button>
+        <button type="button" onClick={() => setAll(true)} className="h-8 rounded-full bg-muted px-3 text-xs font-semibold transition hover:bg-border">Sab pe approval</button>
         <button type="button" onClick={() => setAll(false)} className="h-8 rounded-full bg-muted px-3 text-xs font-semibold transition hover:bg-border">Sab band</button>
-        <span className="ms-auto flex flex-wrap items-center gap-2 text-sm">
-          Approve karega
-          <span className="flex gap-1 rounded-full bg-muted p-1">
-            {(Object.keys(APPROVER) as Approver[]).map((a) => (
-              <button key={a} type="button" aria-pressed={def === a} onClick={() => setDef(a)}
-                className={`h-7 rounded-full px-3 text-xs font-medium transition ${def === a ? 'bg-card shadow-raised' : 'hover:bg-border'}`}>{APPROVER[a]}</button>
-            ))}
-          </span>
+        <span className="text-xs text-muted-foreground">Owner khud jo karein, us pe approval nahi lagta.</span>
+        <span className="ms-auto flex items-center gap-2">
+          {dirty.length > 0 && <button type="button" onClick={() => setCur(base)} className="h-8 rounded-full px-3 text-xs font-semibold text-muted-foreground transition hover:bg-muted">Wapas</button>}
+          <button type="button" onClick={save} disabled={saving || dirty.length === 0} className="h-8 rounded-full bg-brand px-4 text-xs font-semibold text-brand-fg transition hover:bg-brand-hover disabled:opacity-50">{saving ? 'Save ho raha hai…' : dirty.length ? `Save (${dirty.length})` : 'Save'}</button>
         </span>
       </section>
+      {msg && <p role={msg.ok ? 'status' : 'alert'} className={`rounded-xl px-4 py-2.5 text-sm ${msg.ok ? 'bg-success/10 text-on-tint-success' : 'bg-danger/10 text-on-tint-danger'}`}>{msg.text}</p>}
 
       {OP_GROUPS.map((g) => (
         <section key={g} aria-label={g} className="space-y-2">
           <h2 className="px-1 text-title font-semibold">{g}</h2>
           <div className="grid gap-3 lg:grid-cols-2">
             {OP_DOCUMENTS.filter((d) => d.group === g).map((d) => (
-              <DocCard key={d.key} d={d} on={on} setOn={setOn} who={who} setWho={setWho} def={def} today={today} />
+              <DocCard key={d.key} d={d} cur={cur} base={base} saved={rules} set={set} />
             ))}
           </div>
         </section>
@@ -125,49 +130,67 @@ function Approvals({ rules }: { rules: Record<string, boolean> }) {
   );
 }
 
-const TODAY: Record<string, { label: string; tone: 'success' | 'neutral' | 'warning' | 'danger' }> = {
-  on: { label: 'Aaj: approval lagta hai', tone: 'success' },
-  off: { label: 'Aaj: niyam se band', tone: 'warning' },
-  unset: { label: 'Aaj: bina approval', tone: 'neutral' },
-  new: { label: 'Naya banana hoga', tone: 'danger' },
-};
-
-function DocCard({ d, on, setOn, who, setWho, def, today }: {
-  d: OpDocument; on: Record<string, boolean>; setOn: (f: (x: Record<string, boolean>) => Record<string, boolean>) => void;
-  who: Record<string, Approver>; setWho: (f: (x: Record<string, Approver>) => Record<string, Approver>) => void;
-  def: Approver; today: (t?: string) => string;
+function DocCard({ d, cur, base, saved, set }: {
+  d: OpDocument; cur: Record<string, SavedApproval>; base: Record<string, SavedApproval>; saved: Record<string, SavedApproval>;
+  set: (type: string, patch: Partial<SavedApproval>) => void;
 }) {
-  const ids = d.actions.map((a) => `${d.key}.${a.key}`);
-  const allOn = ids.every((id) => on[id]);
+  const types = d.actions.flatMap((a) => (a.type ? [a.type] : []));
   return (
     <article className="rounded-2xl bg-card">
       <header className="flex items-center gap-3 px-5 pt-4">
         <div className="min-w-0 flex-1">
           <h3 className="text-sm font-semibold">{d.label} <span className="font-normal text-muted-foreground">· {d.sample}</span></h3>
-          <p className="text-xs text-muted-foreground">{ids.filter((id) => on[id]).length} / {ids.length} kaam pe approval</p>
+          <p className="text-xs text-muted-foreground">{types.filter((t) => cur[t].on).length} / {d.actions.length} kaam pe approval</p>
         </div>
-        <Switch on={allOn} label={`${d.label}: saare kaam`} onChange={(v) => setOn((x) => ({ ...x, ...Object.fromEntries(ids.map((id) => [id, v])) }))} />
+        {types.length > 0 && <Switch on={types.every((t) => cur[t].on)} label={`${d.label}: saare kaam`} onChange={(v) => types.forEach((t) => set(t, { on: v }))} />}
       </header>
       <ul className="mt-2 pb-2">
         {d.actions.map((a) => {
           const id = `${d.key}.${a.key}`;
-          const t = TODAY[today(a.type)];
+          if (!a.type) {
+            return (
+              <li key={id} className="flex items-center gap-3 px-5 py-2 text-muted-foreground">
+                <p className="min-w-0 flex-1 text-sm">{a.label}</p>
+                <Badge tone="neutral">Agla kadam</Badge>
+              </li>
+            );
+          }
+          const type = a.type;
+          const c = cur[type];
+          const t = requestType(type);
+          const pending = !sameApproval(c, base[type]);
           return (
-            <li key={id} className="flex items-center gap-3 px-5 py-2 transition-colors hover:bg-muted/40">
+            <li key={id} className={`flex flex-wrap items-center gap-x-3 gap-y-1.5 px-5 py-2 transition-colors ${pending ? 'bg-warning/10' : 'hover:bg-muted/40'}`}>
               <div className="min-w-0 flex-1">
                 <p className="text-sm">{a.label}</p>
-                <Badge tone={t.tone}>{t.label}</Badge>
+                {(!saved[type] || pending) && (
+                  <p className="flex flex-wrap gap-1">
+                    {!saved[type] && <Badge tone="neutral">{t?.legacy === 'hierarchy' ? 'Aaj: reporting line se' : 'Aaj: koi niyam nahi'}</Badge>}
+                    {pending && <Badge tone="warning">save baaki</Badge>}
+                  </p>
+                )}
               </div>
-              {on[id] && (
-                <label className="sr-only" htmlFor={`who-${id}`}>Approve kaun karega</label>
+              {c.on && t?.hasAmount && (
+                <label className="flex items-center gap-1 text-xs text-muted-foreground">
+                  <span aria-hidden="true">₹</span>
+                  <input type="number" inputMode="numeric" min={0} step={1} placeholder="har raqam"
+                    aria-label={`${d.label}: ${a.label} - is raqam se upar approval (khali = har raqam)`}
+                    value={c.thresholdPaise == null ? '' : c.thresholdPaise / 100}
+                    onChange={(e) => set(type, { thresholdPaise: e.target.value === '' ? null : Math.max(0, Math.round(Number(e.target.value) * 100)) })}
+                    className="h-8 w-24 rounded-full bg-muted px-3 font-num text-xs tabular-nums text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-brand" />
+                  <span>se upar</span>
+                </label>
               )}
-              {on[id] && (
-                <select id={`who-${id}`} value={who[id] ?? def} onChange={(e) => setWho((x) => ({ ...x, [id]: e.target.value as Approver }))}
-                  className="h-8 rounded-full bg-muted px-2.5 text-xs font-medium focus:outline-none focus-visible:ring-2 focus-visible:ring-brand">
-                  {(Object.keys(APPROVER) as Approver[]).map((k) => <option key={k} value={k}>{APPROVER[k]}</option>)}
-                </select>
+              {c.on && (
+                <>
+                  <label className="sr-only" htmlFor={`who-${id}`}>{`${d.label}: ${a.label} - approve kaun karega`}</label>
+                  <select id={`who-${id}`} value={c.approver} onChange={(e) => set(type, { approver: e.target.value as Approver })}
+                    className="h-8 rounded-full bg-muted px-2.5 text-xs font-medium focus:outline-none focus-visible:ring-2 focus-visible:ring-brand">
+                    {(Object.keys(APPROVER) as Approver[]).filter((k) => k !== 'keep' || base[type].approver === 'keep').map((k) => <option key={k} value={k}>{APPROVER[k]}</option>)}
+                  </select>
+                </>
               )}
-              <Switch on={!!on[id]} label={`${d.label}: ${a.label} - approval`} onChange={(v) => setOn((x) => ({ ...x, [id]: v }))} />
+              <Switch on={c.on} label={`${d.label}: ${a.label} - approval`} onChange={(v) => set(type, { on: v })} />
             </li>
           );
         })}

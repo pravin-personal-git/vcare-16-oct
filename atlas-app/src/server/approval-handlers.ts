@@ -313,8 +313,13 @@ const HANDLERS: Record<string, ApprovalHandler> = {
 
   job_challan: {
     async describe(storeId, id) {
-      const r = await db.jobChallan.findFirst({ where: { id, storeId }, select: { challanNo: true, createdBy: true, note: true, lines: { select: { qty: true, product: { select: { productName: true } } } }, complaint: { select: { complaintNo: true } }, installationChallan: { select: { challanNo: true } } } });
-      return r && { title: `Parts for ${r.complaint?.complaintNo ?? r.installationChallan?.challanNo ?? '-'}: challan ${r.challanNo}`, summary: r.lines.map((l) => `${l.product.productName} × ${l.qty}`).join(', ') + (r.note ? ` - ${r.note}` : ''), amountPaise: null, requesterId: r.createdBy };
+      const r = await db.jobChallan.findFirst({ where: { id, storeId }, select: { challanNo: true, createdBy: true, note: true, lines: { select: { qty: true, product: { select: { productName: true, prices: { where: { deletedAt: null, effectiveTo: null }, orderBy: { effectiveFrom: 'desc' }, take: 1, select: { mrpPaise: true } } } } } }, complaint: { select: { complaintNo: true } }, installationChallan: { select: { challanNo: true } } } });
+      // Parts at today's MRP - what "challan above ₹X needs approval" is measured on (30 Oct 2026).
+      // A part with no MRP makes it unknown, and unknown always waits - never ₹0 slipping under the limit.
+      const amountPaise = r && !r.lines.some((l) => !l.product.prices[0]?.mrpPaise)
+        ? r.lines.reduce((t, l) => t + Math.round(Number(l.qty) * l.product.prices[0].mrpPaise), 0)
+        : null;
+      return r && { title: `Parts for ${r.complaint?.complaintNo ?? r.installationChallan?.challanNo ?? '-'}: challan ${r.challanNo}`, summary: r.lines.map((l) => `${l.product.productName} × ${l.qty}`).join(', ') + (r.note ? ` - ${r.note}` : ''), amountPaise, requesterId: r.createdBy };
     },
     async decide(scope, id, decision, userId, note) {
       const { decideJobChallan } = await import('./job-challans');

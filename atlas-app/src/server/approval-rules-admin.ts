@@ -66,7 +66,8 @@ export async function saveRule(storeId: string, input: RuleInput) {
     const rule = await tx.approvalRule.upsert({
       where: { storeId_requestType: { storeId, requestType: input.type } },
       create: { storeId, requestType: input.type, ...data },
-      update: data,
+      // Saving a rule that was reset brings it back - the tombstone would hide it.
+      update: { ...data, deletedAt: null, deletedBy: null },
     });
     await tx.approvalRuleLevel.deleteMany({ where: { ruleId: rule.id } });
     if (input.needsApproval) {
@@ -106,6 +107,39 @@ export async function applyPreset(storeId: string, preset: 'strict' | 'balanced'
       skipRoleIds: existing?.skipRoleIds ?? [], skipUserIds: existing?.skipUserIds ?? [],
     });
   }
+}
+
+/**
+ * Settings > Operations & approvals (30 Oct 2026): one switch per action, an
+ * approver and, for money, an amount. Everything else on a saved rule (later
+ * levels, discount / margin, reminders) is kept; owners always skip - Vcare's
+ * call ("owners chhoote").
+ */
+export interface ApprovalChoice { type: string; on: boolean; approver: 'owner' | 'manager' | 'keep'; thresholdPaise: number | null }
+
+export async function saveApprovalChoices(storeId: string, choices: ApprovalChoice[]) {
+  if (choices.length > REQUEST_TYPES.length) throw new ApprovalRuleError('Too many changes at once.');
+  const ownerRoleIds = (await db.role.findMany({
+    where: { storeId, permissions: { some: { permission: { key: 'settings.edit' } } } }, select: { id: true },
+  })).map((r) => r.id);
+  for (const c of choices) {
+    const t = requestType(c.type);
+    if (!t) throw new ApprovalRuleError('Unknown request type.');
+    if (c.thresholdPaise != null && !(Number.isInteger(c.thresholdPaise) && c.thresholdPaise >= 0)) throw new ApprovalRuleError(`${t.label}: amount sahi likhiye.`);
+    const old = await loadRule(storeId, c.type);
+    const keep = c.approver === 'keep' && old?.levels.length;
+    await saveRule(storeId, {
+      type: c.type,
+      needsApproval: c.on,
+      thresholdPaise: c.thresholdPaise,
+      maxDiscountPct: old?.maxDiscountPct ?? null, minMarginPct: old?.minMarginPct ?? null,
+      skipRoleIds: [...new Set([...(old?.skipRoleIds ?? []), ...ownerRoleIds])],
+      skipUserIds: old?.skipUserIds ?? [],
+      levels: keep ? old!.levels : [{ level: 1, approverKind: c.approver === 'manager' ? 'manager' : 'owner', roleId: null, userId: null, minAmountPaise: null }],
+      nudgeHours: old?.nudgeHours ?? 24, escalateHours: old?.escalateHours ?? 48, escalateTo: old?.escalateTo ?? 'owner',
+    });
+  }
+  return { saved: choices.length };
 }
 
 export async function ruleChoices(storeId: string) {

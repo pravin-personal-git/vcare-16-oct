@@ -73,7 +73,7 @@ export const REQUEST_TYPES: RequestType[] = [
   // Workflow slice 3: a technician starting work although the location check failed.
   { key: 'site_override', label: 'Location override (field job)', group: 'Service', hasAmount: false, legacy: 'hierarchy', href: (id) => `/services/board?open=${id}` },
   // Workflow slice 4: parts for a field job, before the store issues them.
-  { key: 'job_challan', label: 'Job challan (parts)', group: 'Service', hasAmount: false, legacy: 'none', href: (id) => `/goods-dispatch/job-parts?open=${id}` },
+  { key: 'job_challan', label: 'Job challan (parts)', group: 'Service', hasAmount: true, legacy: 'none', href: (id) => `/goods-dispatch/job-parts?open=${id}` },
   // Workflow slice 6: a resolved job waiting to be closed.
   { key: 'job_close', label: 'Close a field job', group: 'Service', hasAmount: false, legacy: 'none', href: (id) => `/services/complaints/${id}` },
   // Stage 2 of the repair flow (10 Oct 2026): a manager voids one item's warranty.
