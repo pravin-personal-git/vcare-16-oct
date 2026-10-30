@@ -1,5 +1,6 @@
 import 'server-only';
 import { db } from './db';
+import { forgetMenuConfig } from './menu-cache';
 import { scopeWhere, scopeForWrite, type StoreScope } from './store-scope';
 
 /**
@@ -230,7 +231,7 @@ export async function updateRole(
     db.roleMenuConfig.createMany({
       data: input.menuIds.map((menuId) => ({ storeId: role.storeId, roleId, menuId, isVisible: true })),
     }),
-  ]);
+  ]);  forgetMenuConfig();
 }
 
 /**

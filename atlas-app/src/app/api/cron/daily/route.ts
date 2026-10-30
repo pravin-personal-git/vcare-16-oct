@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { db } from '@/server/db';
 import { recognizeAmcRevenue } from '@/server/amc-revenue';
 import { runReminders } from '@/server/reminders';
+import { checkEgress, type EgressReport } from '@/server/egress-watch';
 
 /**
  * The morning job, 08:00 India time (27 Sep 2026). Two things every branch
@@ -10,7 +11,8 @@ import { runReminders } from '@/server/reminders';
  *   - AMC income earned so far moves out of AMC Received in Advance (ACC-1;
  *     it used to run alone as /api/cron/amc-revenue, which still works by hand);
  *   - renewal reminders, personal reminders, approval nudges / escalations and
- *     the owner's morning summary (NOTIFICATIONS-APPROVALS-SPEC.md).
+ *     the owner's morning summary (NOTIFICATIONS-APPROVALS-SPEC.md);
+ *   - the egress watch: how much left the database since yesterday (31 Oct 2026).
  * Guarded by CRON_SECRET like every scheduled route. Each branch is its own
  * try, so one failing branch never stops the rest.
  */
@@ -42,6 +44,12 @@ export async function GET(req: Request) {
       console.error('[daily] reminders store failed', s.id, e);
     }
   }
-  console.log('[daily]', JSON.stringify({ amcStores: amcStores.length, posted, stores: stores.length, sent }));
-  return NextResponse.json({ amcStores: amcStores.length, posted, stores: stores.length, sent });
+  let egress: EgressReport | null = null;
+  try {
+    egress = await checkEgress();
+  } catch (e) {
+    console.error('[daily] egress watch failed', e);
+  }
+  console.log('[daily]', JSON.stringify({ amcStores: amcStores.length, posted, stores: stores.length, sent, egress }));
+  return NextResponse.json({ amcStores: amcStores.length, posted, stores: stores.length, sent, egress });
 }

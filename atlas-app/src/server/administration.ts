@@ -1,5 +1,6 @@
 import 'server-only';
 import { db } from './db';
+import { forgetMenuConfig } from './menu-cache';
 import { scopeWhere, scopeForWrite, type StoreScope } from './store-scope';
 import { randomInt } from 'node:crypto';
 import { hashPassword, verifyPassword } from './auth/password';
@@ -827,6 +828,7 @@ export async function setStoreMenu(scope: StoreScope, menuId: string, isEnabled:
       }),
     ),
   );
+  forgetMenuConfig();
 }
 
 export async function setRoleMenu(
@@ -852,6 +854,7 @@ export async function setRoleMenu(
       }),
     ),
   );
+  forgetMenuConfig();
 }
 
 /** A specific person's menu overrides, keyed by menu id - present only where a row exists. */
@@ -884,6 +887,7 @@ export async function setUserMenu(
 
   if (override === null) {
     await db.userMenuConfig.deleteMany({ where: { storeId, userId, menuId: { in: ids } } });
+    forgetMenuConfig();
     return;
   }
 
@@ -896,6 +900,7 @@ export async function setUserMenu(
       }),
     ),
   );
+  forgetMenuConfig();
 }
 
 /**
@@ -949,6 +954,7 @@ export async function applyBuiltOnlyMenus(scope: StoreScope, builtRoutes: string
     ),
   ]);
 
+  forgetMenuConfig();
   return { enabled: menus.filter(decide).length, total: menus.length };
 }
 

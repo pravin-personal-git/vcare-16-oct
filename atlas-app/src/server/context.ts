@@ -5,6 +5,8 @@ import { redirect } from 'next/navigation';
 import { canOpenRoute } from '@/lib/route-access';
 import { menuHides, type MenuRoutes } from '@/lib/menu-gate';
 import { cache } from 'react';
+import { unstable_cache } from 'next/cache';
+import { MENU_CONFIG_TAG } from './menu-cache';
 import { cookies, headers } from 'next/headers';
 import type { AccountLifecycleState } from '@prisma/client';
 import { db } from './db';
@@ -358,8 +360,12 @@ export async function buildContextFromAssignments(input: {
    * Promise.all issues three queries concurrently, but a single pooled
    * connection serialises them anyway, so it costs three round trips. A
    * transaction array is sent as one batch and costs one.
+   *
+   * Kept for 60 s (31 Oct 2026): every page view re-read ~370 menu rows - 58,000
+   * times in two weeks. Menu settings rarely change, and the screens that change
+   * them clear the cache (server/menu-cache). Permissions are NOT cached.
    */
-  const [storeCfg, roleCfg, allMenus, userCfg] = await db.$transaction([
+  const [storeCfg, roleCfg, allMenus, userCfg] = await unstable_cache(() => db.$transaction([
     db.storeMenuConfig.findMany({
       where: { storeId: { in: storeIds }, isEnabled: true },
       select: { menuId: true },
@@ -379,7 +385,7 @@ export async function buildContextFromAssignments(input: {
       where: { storeId: { in: storeIds }, userId: user.id },
       select: { menuId: true, isVisible: true },
     }),
-  ]);
+  ]), ['menu-config', user.id, storeIds.join(','), roleIds.join(',')], { revalidate: 60, tags: [MENU_CONFIG_TAG] })();
 
   const byRole = new Map<string, string[]>();
   for (const rc of roleCfg) {

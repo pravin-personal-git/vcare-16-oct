@@ -66,11 +66,16 @@ export async function costsFor(
   const resolved = method ?? (await getCostMethod(scope));
 
   const [history, prices] = await Promise.all([
-    db.productPurchasePrice.findMany({
-      where: { ...scopeWhere(scope), productId: { in: productIds } },
-      orderBy: { purchasedAt: 'desc' },
-      select: { productId: true, unitCostPaise: true, purchasedAt: true },
-    }),
+    // Only the newest HISTORY_DEPTH rows per product leave the database (31 Oct
+    // 2026): the whole history was read and trimmed here - 8,200 rows a call.
+    db.$queryRaw<{ productId: string; unitCostPaise: number; purchasedAt: Date }[]>`
+      SELECT "productId", "unitCostPaise", "purchasedAt" FROM (
+        SELECT "productId", "unitCostPaise", "purchasedAt",
+               ROW_NUMBER() OVER (PARTITION BY "productId" ORDER BY "purchasedAt" DESC) AS rn
+        FROM "ProductPurchasePrice"
+        WHERE "storeId" = ANY(${scope.kind === 'single' ? [scope.storeId] : scope.storeIds})
+          AND "productId" = ANY(${productIds}) AND "deletedAt" IS NULL
+      ) t WHERE rn <= ${HISTORY_DEPTH} ORDER BY "purchasedAt" DESC`,
     db.productPrice.findMany({
       where: { productId: { in: productIds }, effectiveTo: null },
       orderBy: { effectiveFrom: 'desc' },
