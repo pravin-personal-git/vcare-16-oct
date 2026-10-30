@@ -3187,6 +3187,14 @@ model HelpdeskTicket {
   resolvedAt DateTime?
   closedAt   DateTime?
 
+  /// Sent to the software's own support team (30 Oct 2026): shows in the
+  /// platform owner's portal (Support) as well as this business's desk.
+  toSupport       Boolean   @default(false)
+  sentToSupportAt DateTime?
+  /// What the person was looking at when they raised it - page, browser,
+  /// roles, branch, app version - so support rarely has to ask.
+  context         Json?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -3204,6 +3212,7 @@ model HelpdeskTicket {
 
   @@index([storeId, status])
   @@index([storeId, raisedById])
+  @@index([toSupport, status])
 }
 
 /// Append-only, same rule as AssetHistoryEntry and StockMovement - a
@@ -3219,8 +3228,12 @@ model HelpdeskComment {
   statusFrom String?
   statusTo   String?
 
-  authorId  String?
-  createdAt DateTime @default(now())
+  authorId    String?
+  /// Written by the software's support team from the platform portal.
+  fromSupport Boolean  @default(false)
+  /// A support team note the business never sees.
+  internal    Boolean  @default(false)
+  createdAt   DateTime @default(now())
 
   // ---- sync (F2) ----
   /// F2: bumped on every write. What F3 compares - two clocks give two answers, a counter gives one.

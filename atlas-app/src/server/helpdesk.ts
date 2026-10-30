@@ -3,6 +3,7 @@ import { db } from './db';
 import { scopeWhere, scopeForWrite, type StoreScope } from './store-scope';
 import { allocateDocumentNumber } from './allocate-document-number';
 import { LIST_MAX_ROWS } from '@/lib/list-limits';
+import { signedUrls } from './storage';
 
 /**
  * Common Hub - Helpdesk: internal employee tickets. Distinct from the
@@ -19,6 +20,12 @@ import { LIST_MAX_ROWS } from '@/lib/list-limits';
  * view/edit split already used for `complaints.*`. Raising a ticket and
  * commenting on your OWN ticket need neither permission, the same as
  * `asset_request`.
+ *
+ * 30 Oct 2026: a ticket can also go to the software's own support team
+ * (`toSupport`), who answer it from the platform portal (server/platform-
+ * support). Their replies carry `fromSupport`; their `internal` notes are
+ * never shown to the business. Screenshots hang off a comment as
+ * `helpdesk_comment` attachments.
  */
 
 export class HelpdeskError extends Error {}
@@ -94,6 +101,7 @@ export interface HelpdeskTicketRow {
   closedAt: Date | null;
   createdAt: Date;
   commentCount: number;
+  toSupport: boolean;
 }
 
 function toTicketRow(r: {
@@ -102,7 +110,7 @@ function toTicketRow(r: {
   subject: string; description: string; priority: string; status: string;
   assignedToId: string | null; assignedTo: { fullName: string } | null;
   resolvedAt: Date | null; closedAt: Date | null; createdAt: Date;
-  comments: { id: string }[];
+  comments: { id: string }[]; toSupport: boolean;
 }): HelpdeskTicketRow {
   return {
     id: r.id, ticketNo: r.ticketNo, raisedById: r.raisedById, raisedByName: r.raisedBy.fullName,
@@ -112,6 +120,7 @@ function toTicketRow(r: {
     assignedToId: r.assignedToId, assignedToName: r.assignedTo?.fullName ?? null,
     resolvedAt: r.resolvedAt, closedAt: r.closedAt, createdAt: r.createdAt,
     commentCount: r.comments.length,
+    toSupport: r.toSupport,
   };
 }
 
@@ -139,7 +148,7 @@ export async function listHelpdeskTickets(
       raisedBy: { select: { fullName: true } },
       category: { select: { name: true } },
       assignedTo: { select: { fullName: true } },
-      comments: { select: { id: true } },
+      comments: { where: { internal: false }, select: { id: true } },
     },
     take: LIST_MAX_ROWS,
   });
@@ -164,26 +173,48 @@ export interface HelpdeskCommentRow {
   authorId: string | null;
   authorName: string | null;
   createdAt: Date;
+  fromSupport: boolean;
+  internal: boolean;
+  files: CommentFile[];
+}
+
+export interface CommentFile { id: string; fileName: string; mimeType: string; url: string | null }
+
+/** Screenshots and files on each comment, with short-lived links. */
+export async function commentFiles(commentIds: string[]): Promise<Map<string, CommentFile[]>> {
+  const rows = commentIds.length
+    ? await db.documentAttachment.findMany({ where: { docType: 'helpdesk_comment', docId: { in: commentIds } }, orderBy: { uploadedAt: 'asc' } })
+    : [];
+  const urls = rows.length ? await signedUrls(rows.map((r) => r.storagePath)).catch(() => new Map<string, string>()) : new Map<string, string>();
+  const out = new Map<string, CommentFile[]>();
+  for (const r of rows) out.set(r.docId, [...(out.get(r.docId) ?? []), { id: r.id, fileName: r.fileName, mimeType: r.mimeType, url: urls.get(r.storagePath) ?? null }]);
+  return out;
+}
+
+/** Comments with their authors and files - `internal` notes only for the support team. */
+export async function commentRows(ticketId: string, opts: { withInternal: boolean }): Promise<HelpdeskCommentRow[]> {
+  const rows = await db.helpdeskComment.findMany({
+    where: { ticketId, ...(opts.withInternal ? {} : { internal: false }) },
+    orderBy: { createdAt: 'asc' },
+  });
+  const authorIds = [...new Set(rows.map((r) => r.authorId).filter((x): x is string => !!x))];
+  const [authors, files] = await Promise.all([
+    authorIds.length ? db.user.findMany({ where: { id: { in: authorIds } }, select: { id: true, fullName: true } }) : [],
+    commentFiles(rows.map((r) => r.id)),
+  ]);
+  const nameById = new Map(authors.map((a) => [a.id, a.fullName]));
+  return rows.map((r) => ({
+    id: r.id, kind: r.kind, body: r.body, statusFrom: r.statusFrom, statusTo: r.statusTo,
+    authorId: r.authorId, authorName: r.authorId ? nameById.get(r.authorId) ?? null : null,
+    createdAt: r.createdAt, fromSupport: r.fromSupport, internal: r.internal, files: files.get(r.id) ?? [],
+  }));
 }
 
 export async function listHelpdeskComments(
   scope: StoreScope, ticketId: string, viewer: { userId: string; canViewAll: boolean },
 ): Promise<HelpdeskCommentRow[]> {
   await getTicketForViewer(scope, ticketId, viewer);
-  const rows = await db.helpdeskComment.findMany({
-    where: { ticketId },
-    orderBy: { createdAt: 'asc' },
-  });
-  const authorIds = [...new Set(rows.map((r) => r.authorId).filter((x): x is string => !!x))];
-  const authors = authorIds.length
-    ? await db.user.findMany({ where: { id: { in: authorIds } }, select: { id: true, fullName: true } })
-    : [];
-  const nameById = new Map(authors.map((a) => [a.id, a.fullName]));
-  return rows.map((r) => ({
-    id: r.id, kind: r.kind, body: r.body, statusFrom: r.statusFrom, statusTo: r.statusTo,
-    authorId: r.authorId, authorName: r.authorId ? nameById.get(r.authorId) ?? null : null,
-    createdAt: r.createdAt,
-  }));
+  return commentRows(ticketId, { withInternal: false });
 }
 
 export interface TicketInput {
@@ -191,6 +222,10 @@ export interface TicketInput {
   subject: string;
   description: string;
   priority: TicketPriority;
+  /** Send it to the software's support team as well. */
+  toSupport?: boolean;
+  /** Page, browser, roles... captured when it was raised. */
+  context?: Record<string, string | null>;
 }
 
 function validateTicket(input: TicketInput) {
@@ -198,7 +233,7 @@ function validateTicket(input: TicketInput) {
   if (!input.description.trim()) throw new HelpdeskError('Describe the issue.');
 }
 
-export async function raiseHelpdeskTicket(scope: StoreScope, input: TicketInput, userId: string): Promise<{ id: string; ticketNo: string }> {
+export async function raiseHelpdeskTicket(scope: StoreScope, input: TicketInput, userId: string): Promise<{ id: string; ticketNo: string; commentId: string }> {
   const storeId = scopeForWrite(scope);
   validateTicket(input);
 
@@ -213,21 +248,43 @@ export async function raiseHelpdeskTicket(scope: StoreScope, input: TicketInput,
       storeId, ticketNo, raisedById: userId,
       categoryId: input.categoryId, subject: input.subject.trim(), description: input.description.trim(),
       priority: input.priority,
-      comments: { create: { kind: 'note', body: 'Ticket raised.', authorId: userId } },
+      toSupport: !!input.toSupport, sentToSupportAt: input.toSupport ? new Date() : null,
+      context: input.context ?? undefined,
+      comments: { create: { kind: 'note', body: input.toSupport ? 'Ticket raised and sent to software support.' : 'Ticket raised.', authorId: userId } },
     },
+    include: { comments: { select: { id: true } } },
   });
-  return { id: ticket.id, ticketNo: ticket.ticketNo };
+  return { id: ticket.id, ticketNo: ticket.ticketNo, commentId: ticket.comments[0].id };
 }
 
 /** A note on a ticket - either side (the raiser or support) can add one. */
 export async function addHelpdeskComment(
   scope: StoreScope, ticketId: string, body: string, viewer: { userId: string; canViewAll: boolean },
-): Promise<void> {
+): Promise<{ id: string }> {
   if (!body.trim()) throw new HelpdeskError('Comment cannot be empty.');
   await getTicketForViewer(scope, ticketId, viewer);
-  await db.helpdeskComment.create({
+  return db.helpdeskComment.create({
     data: { ticketId, kind: 'note', body: body.trim(), authorId: viewer.userId },
+    select: { id: true },
   });
+}
+
+/** Hand a ticket to the software's support team - the raiser or this business's helpdesk. */
+export async function sendTicketToSupport(scope: StoreScope, ticketId: string, viewer: { userId: string; canViewAll: boolean }): Promise<void> {
+  const ticket = await getTicketForViewer(scope, ticketId, viewer);
+  if (ticket.toSupport) return;
+  await db.$transaction([
+    db.helpdeskTicket.update({ where: { id: ticketId }, data: { toSupport: true, sentToSupportAt: new Date() } }),
+    db.helpdeskComment.create({ data: { ticketId, kind: 'note', body: 'Sent to software support.', authorId: viewer.userId } }),
+  ]);
+}
+
+/** A file may go on a person's own comment, on a ticket they can open. Returns the ticket's branch. */
+export async function assertOwnComment(scope: StoreScope, ticketId: string, commentId: string, viewer: { userId: string; canViewAll: boolean }): Promise<string> {
+  const ticket = await getTicketForViewer(scope, ticketId, viewer);
+  const c = await db.helpdeskComment.findFirst({ where: { id: commentId, ticketId, authorId: viewer.userId }, select: { id: true } });
+  if (!c) throw new HelpdeskError('That message is not yours to add a file to.');
+  return ticket.storeId;
 }
 
 /** Assign (or reassign) a ticket to a support user - `helpdesk.edit` only. */

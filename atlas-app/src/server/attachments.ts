@@ -38,7 +38,7 @@ export type SalesDocType = 'quotation' | 'sales_order' | 'invoice';
  *
  * `receipt` added 11 Oct 2026: the payment proof (UPI screenshot, cheque photo).
  */
-export type DocType = SalesDocType | 'goods_receipt' | 'lead' | 'complaint' | 'installation_challan' | 'receipt';
+export type DocType = SalesDocType | 'goods_receipt' | 'lead' | 'complaint' | 'installation_challan' | 'receipt' | 'helpdesk_comment';
 
 export {
   ALLOWED_MIME, MAX_BYTES, describeSize, rejectReason, sniffMime, bytesMatchType,

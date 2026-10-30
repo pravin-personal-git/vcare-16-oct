@@ -1,6 +1,8 @@
 import { redirect } from 'next/navigation';
 import Link from 'next/link';
 import { getPlatformContext } from '@/server/platform-context';
+import { resolveBestOrgScope } from '@/server/platform-scope';
+import { supportWaitingCount } from '@/server/platform-support';
 import { logout } from '@/app/login/actions';
 import { Icon } from '@/components/ui/Icon';
 
@@ -18,6 +20,14 @@ export default async function PlatformLayout({ children }: { children: React.Rea
   const canSeeResellers = ctx.permissions.has('platformReseller.view');
   const canSeeSettings = ctx.permissions.has('platformConfig.edit');
   const canSeeAudit = ctx.permissions.has('platformAudit.view');
+  // Tickets businesses sent to support, still waiting on a first answer or the next one.
+  const scope = await resolveBestOrgScope(ctx.memberships);
+  const waiting = scope ? await supportWaitingCount(scope) : 0;
+  const supportLink = (cls: string) => (
+    <Link href="/platform/support" className={cls}>
+      Support{waiting > 0 && <span className="ms-1.5 rounded-full bg-danger px-1.5 text-micro font-bold text-white">{waiting}</span>}
+    </Link>
+  );
 
   // The widest membership names the shell - a PLATFORM one reads "Atlas
   // Platform" (the root account's own name), a RESELLER-only user sees
@@ -43,6 +53,7 @@ export default async function PlatformLayout({ children }: { children: React.Rea
 
           <nav className="ms-6 hidden items-center gap-1 sm:flex">
             <Link href="/platform/tenants" className="rounded px-3 py-1.5 text-sm font-medium text-navy-fg/80 transition hover:bg-white/10 hover:text-navy-fg">Tenants</Link>
+            {scope && supportLink('rounded px-3 py-1.5 text-sm font-medium text-navy-fg/80 transition hover:bg-white/10 hover:text-navy-fg')}
             {canSeeResellers && (
               <Link href="/platform/resellers" className="rounded px-3 py-1.5 text-sm font-medium text-navy-fg/80 transition hover:bg-white/10 hover:text-navy-fg">Resellers</Link>
             )}
@@ -67,6 +78,7 @@ export default async function PlatformLayout({ children }: { children: React.Rea
 
         <nav className="flex items-center gap-1 overflow-x-auto border-t border-white/10 px-2 py-1.5 sm:hidden">
           <Link href="/platform/tenants" className="whitespace-nowrap rounded px-3 py-1.5 text-xs font-medium text-navy-fg/80 hover:bg-white/10 hover:text-navy-fg">Tenants</Link>
+          {scope && supportLink('whitespace-nowrap rounded px-3 py-1.5 text-xs font-medium text-navy-fg/80 hover:bg-white/10 hover:text-navy-fg')}
           {canSeeResellers && (
             <Link href="/platform/resellers" className="whitespace-nowrap rounded px-3 py-1.5 text-xs font-medium text-navy-fg/80 hover:bg-white/10 hover:text-navy-fg">Resellers</Link>
           )}

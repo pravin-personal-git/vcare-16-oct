@@ -10,8 +10,9 @@ import { KpiStrip, type KpiCard } from '@/components/ui/KpiStrip';
 import { Modal } from '@/components/ui/Modal';
 import { newestFirst, oldestFirst, type CardListPage } from '@/lib/card-list';
 import { useListParams } from '@/components/ui/useListParams';
+import { FilePicker, Thread, uploadFiles, type ThreadComment } from '@/components/helpdesk/Thread';
 import {
-  raiseTicketAction, addCommentAction, setStatusAction,
+  raiseTicketAction, addCommentAction, setStatusAction, sendToSupportAction,
   fetchCommentsAction, assignTicketAction, fetchAssignableUsersAction,
   createCategoryAction, removeCategoryAction,
 } from './actions';
@@ -36,6 +37,7 @@ interface TicketRow {
   closedAt: string | null;
   createdAt: string;
   commentCount: number;
+  toSupport: boolean;
 }
 
 interface CategoryRow {
@@ -214,6 +216,7 @@ export function HelpdeskClient({
                     <p className="text-sm font-semibold">{t.subject}</p>
                     <Badge tone={STATUS_TONE[t.status]}>{STATUS_LABEL[t.status]}</Badge>
                     <Badge tone={PRIORITY_TONE[t.priority]}>{t.priority}</Badge>
+                    {t.toSupport && <Badge tone="navy" icon="help-circle">Software support</Badge>}
                   </div>
                   <p className="text-xs text-muted-foreground">
                     {t.ticketNo}
@@ -237,8 +240,14 @@ export function HelpdeskClient({
           categories={categories}
           busy={busy === 'raise'}
           onClose={() => setRaising(false)}
-          onRaise={async (input) => {
-            const ok = await act('raise', () => raiseTicketAction(input));
+          onRaise={async ({ files, ...input }) => {
+            let failed: string | null = null;
+            const ok = await act('raise', async () => {
+              const r = await raiseTicketAction(input);
+              if (r.ticketId && r.commentId && files.length) failed = await uploadFiles('/api/helpdesk/files', r.ticketId, r.commentId, files);
+              return r;
+            });
+            if (failed) setError(`Ticket raised, but: ${failed}`);
             if (ok) setRaising(false);
           }}
         />
@@ -274,12 +283,20 @@ function RaiseDialog({
   categories: CategoryRow[];
   busy: boolean;
   onClose: () => void;
-  onRaise: (input: { categoryId: string | null; subject: string; description: string; priority: TicketPriority }) => void;
+  onRaise: (input: { categoryId: string | null; subject: string; description: string; priority: TicketPriority; toSupport: boolean; context: Record<string, string | null>; files: File[] }) => void;
 }) {
   const [categoryId, setCategoryId] = useState('');
   const [subject, setSubject] = useState('');
   const [description, setDescription] = useState('');
   const [priority, setPriority] = useState<TicketPriority>('normal');
+  const [toSupport, setToSupport] = useState(false);
+  const [files, setFiles] = useState<File[]>([]);
+  // The page they came from, so support can open the same screen.
+  const context = () => {
+    let page: string | null = null;
+    try { page = document.referrer ? new URL(document.referrer).pathname : null; } catch { /* no referrer */ }
+    return { page, browser: navigator.userAgent, screen: `${window.innerWidth}x${window.innerHeight}` };
+  };
 
   return (
     <Modal
@@ -291,12 +308,23 @@ function RaiseDialog({
         <div className="flex justify-end gap-2">
           <Button variant="outline" onClick={onClose}>Cancel</Button>
           <Button variant="primary" loading={busy} disabled={!subject.trim() || !description.trim()}
-            onClick={() => onRaise({ categoryId: categoryId || null, subject: subject.trim(), description: description.trim(), priority })}>
+            onClick={() => onRaise({ categoryId: categoryId || null, subject: subject.trim(), description: description.trim(), priority, toSupport, context: context(), files })}>
             Submit ticket
           </Button>
         </div>
       }
     >
+      <fieldset className="mb-3">
+        <legend className="mb-1.5 text-sm font-medium">Kisko bhejna hai?</legend>
+        <div className="grid gap-2 sm:grid-cols-2">
+          {([[false, 'Apne admin ko', 'Is business ka helpdesk dekhega'], [true, 'Software support ko', 'Software banane wali team dekhegi - galti, sawaal, naya feature']] as const).map(([v, l, h]) => (
+            <label key={l} className={`flex cursor-pointer items-start gap-2.5 rounded-xl border p-3 transition ${toSupport === v ? 'border-brand bg-brand/5' : 'border-border hover:bg-muted/40'}`}>
+              <input type="radio" name="tk-to" checked={toSupport === v} onChange={() => setToSupport(v)} className="mt-0.5 h-4 w-4 accent-[var(--color-brand)]" />
+              <span><span className="block text-sm font-semibold">{l}</span><span className="block text-xs text-muted-foreground">{h}</span></span>
+            </label>
+          ))}
+        </div>
+      </fieldset>
       <div className="grid gap-3 sm:grid-cols-2">
         {categories.length > 0 && (
           <Field label="Category" htmlFor="tk-cat">
@@ -321,6 +349,7 @@ function RaiseDialog({
           <textarea id="tk-desc" rows={4} value={description} onChange={(e) => setDescription(e.target.value)}
             className="w-full rounded-lg border border-border bg-card p-2 text-sm outline-none focus:border-brand" />
         </Field>
+        <div className="sm:col-span-2"><FilePicker id="tk-files" files={files} onChange={setFiles} /></div>
       </div>
     </Modal>
   );
@@ -374,8 +403,10 @@ function TicketDialog({
   onClose: () => void;
   onChanged: () => void;
 }) {
-  const [comments, setComments] = useState<{ id: string; kind: string; body: string | null; statusFrom: string | null; statusTo: string | null; authorName: string | null; createdAt: string }[] | null>(null);
+  const [comments, setComments] = useState<ThreadComment[] | null>(null);
   const [commentBody, setCommentBody] = useState('');
+  const [files, setFiles] = useState<File[]>([]);
+  const [toSupport, setToSupport] = useState(ticket.toSupport);
   const [assignees, setAssignees] = useState<{ id: string; fullName: string }[] | null>(null);
   const [busy, setBusy] = useState<string | boolean>(false);
   const [error, setError] = useState<string | null>(null);
@@ -397,12 +428,26 @@ function TicketDialog({
   }, [ticket.id]);
 
   async function submitComment() {
-    if (!commentBody.trim()) return;
+    const text = commentBody.trim() || (files.length ? 'Screenshot' : '');
+    if (!text) return;
     setBusy('comment');
     setError(null);
-    const res = await addCommentAction(ticket.id, commentBody.trim());
+    const res = await addCommentAction(ticket.id, text);
     if (res.error) setError(res.error);
-    else { setCommentBody(''); reload(); onChanged(); }
+    else {
+      const failed = res.commentId && files.length ? await uploadFiles('/api/helpdesk/files', ticket.id, res.commentId, files) : null;
+      if (failed) setError(`Note posted, but: ${failed}`);
+      setCommentBody(''); setFiles([]); reload(); onChanged();
+    }
+    setBusy(false);
+  }
+
+  async function sendToSupport() {
+    setBusy('support');
+    setError(null);
+    const res = await sendToSupportAction(ticket.id);
+    if (res.error) setError(res.error);
+    else { setToSupport(true); reload(); onChanged(); }
     setBusy(false);
   }
 
@@ -432,6 +477,10 @@ function TicketDialog({
         <Badge tone={STATUS_TONE[status]}>{STATUS_LABEL[status]}</Badge>
         <Badge tone={PRIORITY_TONE[ticket.priority]}>{ticket.priority}</Badge>
         {ticket.categoryName && <Badge tone="neutral">{ticket.categoryName}</Badge>}
+        {toSupport && <Badge tone="navy" icon="help-circle">Software support ko bheja</Badge>}
+        {!toSupport && (canViewAll || isMine) && (
+          <Button size="sm" variant="outline" className="ms-auto" loading={busy === 'support'} onClick={sendToSupport}>Software support ko bhejo</Button>
+        )}
       </div>
 
       {error && <p className="mb-2 text-sm text-danger">{error}</p>}
@@ -468,35 +517,23 @@ function TicketDialog({
       {!comments ? (
         <p className="text-sm text-muted-foreground">Loading…</p>
       ) : (
-        <ul className="mb-3 max-h-64 space-y-2 overflow-y-auto">
-          {comments.map((c) => (
-            <li key={c.id} className="border-b border-border pb-2 text-sm last:border-0">
-              {c.kind === 'status_change' ? (
-                <span className="text-muted-foreground">
-                  {c.authorName ?? 'Someone'} moved this from <strong>{c.statusFrom?.replace('_', ' ')}</strong> to <strong>{c.statusTo?.replace('_', ' ')}</strong>
-                  {c.body && ` — ${c.body}`}
-                </span>
-              ) : c.kind === 'assignment' ? (
-                <span className="text-muted-foreground">{c.body}</span>
-              ) : (
-                <span><span className="font-medium">{c.authorName ?? 'Someone'}:</span> {c.body}</span>
-              )}
-              <span className="block text-xs text-muted-foreground">{new Date(c.createdAt).toLocaleString('en-IN')}</span>
-            </li>
-          ))}
-        </ul>
+        <div className="mb-3 max-h-80 overflow-y-auto pe-1"><Thread comments={comments} side="business" /></div>
       )}
 
       {(canViewAll || isMine) && (
-        <div className="flex gap-2">
-          <input
-            value={commentBody}
-            onChange={(e) => setCommentBody(e.target.value)}
-            placeholder="Add a note…"
-            className={inputClass}
-            onKeyDown={(e) => e.key === 'Enter' && submitComment()}
-          />
-          <Button variant="outline" loading={busy === 'comment'} disabled={!commentBody.trim()} onClick={submitComment}>Post</Button>
+        <div className="space-y-2">
+          <div className="flex gap-2">
+            <input
+              value={commentBody}
+              onChange={(e) => setCommentBody(e.target.value)}
+              placeholder={toSupport ? 'Support ko jawab likhiye…' : 'Add a note…'}
+              aria-label="Add a note"
+              className={inputClass}
+              onKeyDown={(e) => e.key === 'Enter' && submitComment()}
+            />
+            <Button variant="outline" loading={busy === 'comment'} disabled={!commentBody.trim() && !files.length} onClick={submitComment}>Post</Button>
+          </div>
+          <FilePicker id={`tk-note-files-${ticket.id}`} files={files} onChange={setFiles} />
         </div>
       )}
     </Modal>
