@@ -1,4 +1,5 @@
 import 'server-only';
+import { unstable_cache } from 'next/cache';
 import { db } from './db';
 import { scopeWhere, type StoreScope } from './store-scope';
 import { listProducts } from './products';
@@ -88,6 +89,17 @@ export async function catalogueOptions(scope: StoreScope): Promise<CatalogueOpti
       costPaise: c && c.basis !== 'none' ? c.unitCostPaise : null,
     };
   });
+}
+
+/**
+ * `catalogueOptions` kept for 2 minutes, for the job pages that AutoRefresh
+ * (30 Oct 2026): every refresh re-read every product, price and purchase
+ * - about 15 GB of egress in two weeks.
+ * shortcut: stock on the challan picker can be up to 2 minutes old; issuing
+ * still checks the real stock. Drop the cache if that ever matters.
+ */
+export function cachedCatalogueOptions(scope: StoreScope): Promise<CatalogueOptionRow[]> {
+  return unstable_cache(() => catalogueOptions(scope), ['catalogue-options', JSON.stringify(scope)], { revalidate: 120 })();
 }
 
 export interface PartyOptionRow { id: string; name: string; phone: string; gstin: string | null; isCustomer: boolean; isSupplier: boolean }

@@ -14,7 +14,13 @@ export async function GET(req: Request) {
   return field(req, ['complaints.view', 'complaints.edit'], 'complaints', async (ctx, access) => {
     const scope = access.scope.complaints;
     const all = scope === 'branch' && new URL(req.url).searchParams.get('all') === '1';
-    const [complaints, visits] = await Promise.all([listComplaints(ctx.scope), listServiceVisits(ctx.scope)]);
+    // Done: this person's jobs finished in the last 30 days (phone "Done" tab, 28 Sep 2026).
+    const since = Date.now() - 30 * 86_400_000;
+    // Only open jobs and this person's recent finished ones leave the database (egress, 30 Oct 2026).
+    const [complaints, visits] = await Promise.all([listComplaints(ctx.scope, { where: { OR: [
+      { status: { notIn: ['closed', 'cancelled'] } },
+      { status: { in: ['closed', 'resolved'] }, assignedTechnicianId: ctx.user.id, OR: [{ closedAt: { gte: new Date(since) } }, { createdAt: { gte: new Date(since) } }] },
+    ] } }), listServiceVisits(ctx.scope)]);
     const myVisits = visits.filter((v) => v.technicianId === ctx.user.id && v.status !== 'completed' && v.status !== 'cancelled');
     // "Mine + my team" (B4, 11 Oct 2026) - the same reach as the website.
     const team = scope === 'team' ? await teamIds(ctx.scope, ctx.user.id) : undefined;
@@ -25,8 +31,6 @@ export async function GET(req: Request) {
     const open = complaints.filter((c) => c.status !== 'closed' && c.status !== 'cancelled');
     const shown = all ? open : open.filter((c) => visitComplaints.has(c.id)
       || inScope(scope === 'branch' ? 'mine' : scope, [c.assignedTechnicianId], ctx.user.id, team));
-    // Done: this person's jobs finished in the last 30 days (phone "Done" tab, 28 Sep 2026).
-    const since = Date.now() - 30 * 86_400_000;
     const done = complaints.filter((c) => (c.status === 'closed' || c.status === 'resolved') && c.assignedTechnicianId === ctx.user.id
       && (c.closedAt ?? c.createdAt).getTime() >= since).slice(0, 50);
     return {

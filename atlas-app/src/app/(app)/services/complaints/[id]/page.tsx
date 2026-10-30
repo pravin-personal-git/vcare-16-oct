@@ -8,7 +8,7 @@ import { complaintItems, jobCoverFromItems } from '@/server/complaint-items';
 import { ComplaintView } from './ComplaintView';
 import { callsWithParty } from '@/server/call-logs';
 import { faultyPartsFor, jobChallansFor } from '@/server/job-challans';
-import { catalogueOptions } from '@/server/form-options';
+import { cachedCatalogueOptions } from '@/server/form-options';
 import { getJobSettings } from '@/server/job-settings';
 import { documentTrail } from '@/server/document-trail';
 import { listAttachments } from '@/server/attachments';
@@ -46,7 +46,7 @@ export default async function ComplaintPage({ params }: { params: Promise<{ id: 
     jobChallansFor(ctx.scope, detail.id),
     faultyPartsFor(ctx.scope, { complaintId: detail.id }),
     // The product list only when this person can raise a challan or log a part.
-    canEdit ? catalogueOptions(ctx.scope) : Promise.resolve([]),
+    canEdit ? cachedCatalogueOptions(ctx.scope) : Promise.resolve([]),
     complaintItems(ctx.scope, { id: detail.id, customerId: detail.customerId, createdAt: detail.createdAt }),
   ]);
   // The job's answer: from its items when it has them (stage 2), else its one product.

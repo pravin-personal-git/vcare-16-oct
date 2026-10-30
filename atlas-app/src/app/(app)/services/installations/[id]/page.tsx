@@ -5,7 +5,7 @@ import { listAttachments } from '@/server/attachments';
 import { documentTrail } from '@/server/document-trail';
 import { DocumentTrail } from '@/components/document/DocumentTrail';
 import { installationJobChallans } from '@/server/job-challans';
-import { catalogueOptions } from '@/server/form-options';
+import { cachedCatalogueOptions } from '@/server/form-options';
 import { InstallationView } from './InstallationView';
 import { OldSystemRemarks } from '@/components/document/OldSystemRemarks';
 
@@ -27,7 +27,7 @@ export default async function InstallationPage({ params }: { params: Promise<{ i
     documentTrail(ctx.scope, 'installation', id),
     // Cable, clamps - material not on the order (R3, 22 Oct 2026).
     installationJobChallans(ctx.scope, id),
-    canEdit ? catalogueOptions(ctx.scope) : Promise.resolve([]),
+    canEdit ? cachedCatalogueOptions(ctx.scope) : Promise.resolve([]),
   ]);
   return (
     <>

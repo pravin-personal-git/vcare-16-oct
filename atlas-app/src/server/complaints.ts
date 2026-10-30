@@ -167,9 +167,14 @@ async function technicianNames(ids: (string | null)[]): Promise<Map<string, stri
   return new Map(users.map((u) => [u.id, u.fullName]));
 }
 
-export async function listComplaints(scope: StoreScope, opts: { status?: string } = {}): Promise<ComplaintRow[]> {
+/**
+ * `where` narrows the read in the database (30 Oct 2026): the board and the
+ * phone polled every complaint ever raised - 3,774 rows a call - and that was
+ * most of Supabase's egress. Callers that only show open jobs say so here.
+ */
+export async function listComplaints(scope: StoreScope, opts: { status?: string; where?: Prisma.ComplaintWhereInput } = {}): Promise<ComplaintRow[]> {
   const rows = await db.complaint.findMany({
-    where: { ...scopeWhere(scope), ...(opts.status ? { status: opts.status } : {}) },
+    where: { ...opts.where, ...scopeWhere(scope), ...(opts.status ? { status: opts.status } : {}) },
     include: {
       customer: { select: { firstName: true, lastName: true, companyName: true, phone: true } },
       product: {

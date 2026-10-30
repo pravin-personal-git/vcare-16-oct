@@ -30,7 +30,8 @@ const COLUMNS: { title: string; statuses: JobStatus[] }[] = [
 export default async function JobBoardPage() {
   const ctx = await requireContext();
   const [allJobs, settings, visible, custom] = await Promise.all([
-    listComplaints(ctx.scope),
+    // Only the stages the board has columns for - closed jobs never show here.
+    listComplaints(ctx.scope, { where: { status: { in: COLUMNS.flatMap((c) => c.statuses) } } }),
     ctx.scope.kind === 'single' ? getJobSettings(ctx.scope.storeId) : Promise.resolve(null),
     visibleComplaintFilter(ctx),
     // Stage colours, the overdue rule and columns an admin set (11 Oct 2026).
