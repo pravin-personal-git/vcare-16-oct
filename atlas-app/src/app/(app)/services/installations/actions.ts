@@ -177,8 +177,8 @@ export async function installSendBackAction(id: string, reason: string): Promise
 export async function installItemsAction(id: string, items: { id: string; placement?: string | null; serialNo?: string | null; fitStatus?: string }[]): Promise<ActionState> {
   return pageGuard(id, (ctx) => updateInstallationItems(ctx.scope, id, items, ctx.user.id));
 }
-export async function installAddItemAction(id: string, productId: string, qty: number): Promise<ActionState> {
-  return pageGuard(id, (ctx) => addInstallationItem(ctx.scope, id, { productId, qty }, ctx.user.id));
+export async function installAddItemAction(id: string, productId: string, qty: number, unitIds?: string[]): Promise<ActionState> {
+  return pageGuard(id, (ctx) => addInstallationItem(ctx.scope, id, { productId, qty, unitIds }, ctx.user.id));
 }
 export async function installItemQtyAction(id: string, itemId: string, qty: number): Promise<ActionState> {
   return pageGuard(id, (ctx) => changeInstallationItemQty(ctx.scope, id, itemId, qty, ctx.user.id));

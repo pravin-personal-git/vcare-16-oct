@@ -271,7 +271,8 @@ export function RaiseChallan({ catalogue, busy, onClose, onSave, installation = 
     if (isSerial(id) && n > 0) setSerialsOf(id);
   };
   const setLineUnits = (id: string, units: Unit[]) => setLines(lines.map((l) => (l.productId === id ? { ...l, units } : l)));
-  const unitsOk = (l: { qty: number; units: Unit[] }) => l.units.length === 0 || l.units.length === l.qty;
+  // A serial product always names its units (30 Oct 2026, Vcare: "it didn't ask me for the serial") - one per piece.
+  const unitsOk = (l: { productId: string; qty: number; units: Unit[] }) => l.units.length === l.qty || (!isSerial(l.productId) && l.units.length === 0);
   const valid = lines.length > 0 && lines.every((l) => l.qty > 0 && unitsOk(l));
   const choose = (id: string) => { setPick(id); setPickUnits([]); };
   return (
@@ -290,12 +291,12 @@ export function RaiseChallan({ catalogue, busy, onClose, onSave, installation = 
           onPickUnit={(u) => { if (isSerial(u.productId)) { setPickUnits([{ id: u.unitId, serialNo: u.serialNo }]); setQty(1); } }} />
         <div className="flex items-end gap-2">
           <Field label="Quantity" htmlFor="jc-qty"><input id="jc-qty" type="number" min={1} value={qty} onChange={(e) => setQty(Number(e.target.value))} className="field-input w-24" /></Field>
-          <Button disabled={!pick || !(qty > 0) || (pickUnits.length > 0 && pickUnits.length !== qty)}
+          <Button disabled={!pick || !(qty > 0) || !unitsOk({ productId: pick, qty, units: pickUnits })}
             onClick={() => { setLines([...lines.filter((l) => l.productId !== pick), { productId: pick, qty, units: pickUnits }]); setPick(''); setQty(1); setPickUnits([]); }}>Add line</Button>
         </div>
         {pick && isSerial(pick) && (
           <div className="grid gap-1 text-sm">
-            <span>Serial numbers <span className="text-xs text-muted-foreground">- pick {qty} to reserve them and send the GDN out on approval, or none and the store picks</span></span>
+            <span>Serial numbers <span className="text-danger">*</span> <span className="text-xs text-muted-foreground">- pick {qty}; they are reserved for this job and the GDN goes out on approval</span></span>
             <ShelfUnits productId={pick} need={qty} value={pickUnits} onChange={setPickUnits} />
           </div>
         )}
@@ -321,12 +322,12 @@ export function RaiseChallan({ catalogue, busy, onClose, onSave, installation = 
                 )}
                 {serialsOf === l.productId && (
                   <div className="grid gap-1">
-                    <span className="text-xs text-muted-foreground">Pick {l.qty} serial{l.qty === 1 ? '' : 's'}, or none and the store picks.</span>
+                    <span className="text-xs text-muted-foreground">Pick {l.qty} serial{l.qty === 1 ? '' : 's'}.</span>
                     <ShelfUnits productId={l.productId} need={l.qty} value={l.units} onChange={(u) => setLineUnits(l.productId, u)} />
                     <button type="button" className="justify-self-start text-xs font-medium text-brand hover:underline" onClick={() => setSerialsOf(null)}>Done</button>
                   </div>
                 )}
-                {!unitsOk(l) && <span className="text-xs text-danger">{l.units.length} serial{l.units.length === 1 ? '' : 's'} for {l.qty} - match the quantity, or clear them.</span>}
+                {!unitsOk(l) && <span className="text-xs text-danger">{l.units.length} serial{l.units.length === 1 ? '' : 's'} picked for {l.qty} - pick {l.qty}.</span>}
               </li>
             ))}
           </ul>

@@ -14,6 +14,7 @@ import { SearchSelect, type SearchOption } from '@/components/ui/SearchSelect';
 import { QuickVisitDialog } from '@/components/services/QuickVisitDialog';
 import { CustomerPicker } from '@/components/services/CustomerPicker';
 import { SitePicker, type SiteChoice } from '@/components/services/SitePicker';
+import { ShelfUnits } from '@/components/services/GdnFix';
 import { docMessage } from '@/lib/wa-message';
 import { openWhatsApp } from '@/lib/wa-open';
 import { formatCurrency } from '@/lib/format';
@@ -76,7 +77,9 @@ export function InstallationView({ data: d, files, canEdit, canBill, parts }: {
   const [team, setTeam] = useState<string[]>(d.team.map((t) => t.id));
   const [priority, setPriority] = useState(d.priority);
   const [remark, setRemark] = useState('');
-  const [adding, setAdding] = useState<{ product: SearchOption | null; qty: string } | null>(null);
+  const [adding, setAdding] = useState<{ product: SearchOption | null; qty: string; units: { id: string; serialNo: string }[] } | null>(null);
+  // A serial product must name its units when added (30 Oct 2026, Vcare).
+  const addSerial = !!adding?.product && !!parts?.catalogue.find((p) => p.id === adding.product!.id)?.serial;
   // The line whose unused goods are being sent back, and how many (R2).
   const [returning, setReturning] = useState<{ id: string; n: number } | null>(null);
 
@@ -244,7 +247,7 @@ export function InstallationView({ data: d, files, canEdit, canBill, parts }: {
         <div className="min-w-0 space-y-4">
           <Panel title={`What is being installed (${d.items.length})`}
             sub={locked ? 'Serial and location are filled on the phone.' : 'Add, change or remove lines until it is billed. Serial and location are filled on the phone.'}
-            right={!locked && !adding ? <Button size="sm" variant="tint" icon="plus" onClick={() => setAdding({ product: null, qty: '1' })}>Add item</Button> : undefined}
+            right={!locked && !adding ? <Button size="sm" variant="tint" icon="plus" onClick={() => setAdding({ product: null, qty: '1', units: [] })}>Add item</Button> : undefined}
             pad={false}>
             <div className="overflow-x-auto thin-scroll">
               <table className="w-full min-w-[620px] text-sm">
@@ -295,14 +298,20 @@ export function InstallationView({ data: d, files, canEdit, canBill, parts }: {
                   <tr className="border-t border-border bg-surface/50">
                     <td className="px-3 py-2" colSpan={2}>
                       <div className="flex items-center gap-2">
-                        <div className="min-w-[220px] flex-1"><SearchSelect id="add-item" label="Product" value={adding.product} onChange={(o) => setAdding({ ...adding, product: o })} search={searchGoodsAction} placeholder="Product name or code…" /></div>
-                        <input type="number" min={1} value={adding.qty} onChange={(e) => setAdding({ ...adding, qty: e.target.value })} aria-label="Quantity" className="h-9 w-16 rounded-sm border border-border bg-card px-1.5 font-mono text-sm" />
+                        <div className="min-w-[220px] flex-1"><SearchSelect id="add-item" label="Product" value={adding.product} onChange={(o) => setAdding({ ...adding, product: o, units: [] })} search={searchGoodsAction} placeholder="Product name or code…" /></div>
+                        <input type="number" min={1} value={adding.qty} onChange={(e) => setAdding({ ...adding, qty: e.target.value, units: adding.units.slice(0, Math.max(0, Number(e.target.value) || 0)) })} aria-label="Quantity" className="h-9 w-16 rounded-sm border border-border bg-card px-1.5 font-mono text-sm" />
                       </div>
+                      {addSerial && (
+                        <div className="mt-2 grid gap-1 text-sm">
+                          <span>Serial numbers <span className="text-danger">*</span> <span className="text-xs text-muted-foreground">- pick {Number(adding.qty) || 0}</span></span>
+                          <ShelfUnits productId={adding.product!.id} need={Number(adding.qty) || 0} value={adding.units} onChange={(units) => setAdding({ ...adding, units })} />
+                        </div>
+                      )}
                     </td>
                     <td className="px-3 py-2" colSpan={5}>
                       <div className="flex gap-2">
-                        <Button size="sm" variant="primary" icon="check" loading={pending} disabled={!adding.product || !(Number(adding.qty) > 0)}
-                          onClick={() => { const a = adding; setAdding(null); run(() => installAddItemAction(d.id, a.product!.id, Number(a.qty)), 'Item added'); }}>Add</Button>
+                        <Button size="sm" variant="primary" icon="check" loading={pending} disabled={!adding.product || !(Number(adding.qty) > 0) || (addSerial && adding.units.length !== Number(adding.qty))}
+                          onClick={() => { const a = adding; setAdding(null); run(() => installAddItemAction(d.id, a.product!.id, Number(a.qty), a.units.map((u) => u.id)), 'Item added'); }}>Add</Button>
                         <Button size="sm" variant="ghost" onClick={() => setAdding(null)}>Cancel</Button>
                       </div>
                     </td>
