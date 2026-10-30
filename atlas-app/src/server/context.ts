@@ -11,6 +11,7 @@ import { db } from './db';
 import { requestIp, setActor } from './audit-context';
 import { getSessionToken } from './auth/session';
 import { resolvePermissions, resolveMenus } from './permissions';
+import { applyPersonalLevel, isModuleLevel, moduleByKey } from '@/lib/role-modules';
 import { entitlementFor } from './entitlement';
 import { pickStartStore, resolveScope, type StoreScope } from './store-scope';
 import { resolveActiveImpersonation } from './impersonation';
@@ -343,9 +344,8 @@ export async function buildContextFromAssignments(input: {
     scope.kind === 'single' ? a.storeId === scope.storeId : true,
   );
 
-  const permissions = resolvePermissions(
-    inScope.map((a) => a.role.permissions.map((rp) => rp.permission.key)),
-  );
+  const rolePermissions = resolvePermissions(inScope.map((a) => a.role.permissions.map((rp) => rp.permission.key)));
+  const permissions = await withPersonalAccess(input.user.id, inScope, rolePermissions);
   const roleNames = [...new Set(inScope.map((a) => a.role.name))].sort();
 
   // ---- menu gating -------------------------------------------------------
@@ -388,9 +388,14 @@ export async function buildContextFromAssignments(input: {
 
   const overrideMap = new Map(userCfg.map((u) => [u.menuId, u.isVisible]));
 
+  // A page opened only by the person's own access (Settings > Operations &
+  // approvals) shows in their menu even though no role of theirs ticks it.
+  const ownOnly = permissions === rolePermissions ? [] : allMenus
+    .filter((m) => m.route && canOpenRoute(m.route, permissions) && !canOpenRoute(m.route, rolePermissions))
+    .map((m) => m.id);
   const visibleIds = resolveMenus(
     storeCfg.map((s) => s.menuId),
-    [...byRole.values()],
+    [...byRole.values(), ownOnly],
     overrideMap,
   );
 
@@ -532,3 +537,29 @@ async function enforceRouteAccess(ctx: AppContext): Promise<void> {
 }
 
 export { ACTIVE_STORE_COOKIE };
+
+/**
+ * Roles in scope, then each branch's own per-person levels (30 Oct 2026,
+ * Settings > Operations & approvals), then the union across branches. Per
+ * branch, not after the union: a module switched off for someone in DURG must
+ * not come back through the All Company view because another branch's role
+ * grants it there - only that other branch's own access does.
+ */
+async function withPersonalAccess(userId: string, inScope: Assignment[], rolePermissions: Set<string>): Promise<Set<string>> {
+  const byStore = new Map<string, string[][]>();
+  for (const a of inScope) byStore.set(a.storeId, [...(byStore.get(a.storeId) ?? []), a.role.permissions.map((rp) => rp.permission.key)]);
+  const own = byStore.size
+    ? await db.userAccessOverride.findMany({ where: { userId, storeId: { in: [...byStore.keys()] } }, select: { storeId: true, moduleKey: true, level: true } })
+    : [];
+  if (!own.length) return rolePermissions;
+  const out = new Set<string>();
+  for (const [storeId, lists] of byStore) {
+    let keys: Set<string> = resolvePermissions(lists);
+    for (const o of own) {
+      const m = o.storeId === storeId ? moduleByKey(o.moduleKey) : undefined;
+      if (m && isModuleLevel(o.level)) keys = applyPersonalLevel(keys, m, o.level);
+    }
+    for (const k of keys) out.add(k);
+  }
+  return out;
+}

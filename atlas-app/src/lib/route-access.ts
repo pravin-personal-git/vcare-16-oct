@@ -146,6 +146,7 @@ export const ROUTE_ACCESS: Record<string, RouteRule> = {
   '/settings/employees': [...V.users, ...V.hrm],
   '/settings/call-devices': ['devices.pair', 'calls.manage'],
   '/settings/approval-rules': ['settings.edit'],
+  '/settings/operations': ['settings.edit'],
   '/settings/customisation': ['settings.edit'],
   '/settings': V.settings,
   '/import': ['settings.edit', 'customers.create', 'leads.create', 'products.edit'],

@@ -319,6 +319,13 @@ export const SETTINGS_ENTRIES: readonly SettingsEntry[] = [
     keywords: ['extra field', 'new field', 'dropdown', 'field type', 'mandatory', 'required'],
   },
   {
+    key: 'operations', label: 'Operations & approvals', section: 'documents',
+    group: 'Rules and approvals',
+    route: '/settings/operations', permission: 'settings.edit',
+    hint: 'Each person on simple switches: what they may see, change and approve.',
+    keywords: ['access', 'user access', 'permission', 'who can', 'switch', 'person', 'approval'],
+  },
+  {
     key: 'approval-rules', label: 'Approval Rules & Notifications', section: 'documents',
     group: 'Rules and approvals',
     route: '/settings/approval-rules', permission: 'settings.edit',
