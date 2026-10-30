@@ -3,9 +3,7 @@
   "regions": [
     "bom1"
   ],
-  "framework": "nextjs",
-  "ignoreCommand": "[ \"$VERCEL_ENV\" != \"production\" ]",
-  "crons": [
+  "framework": "nextjs",  "crons": [
     {
       "path": "/api/cron/phone-health",
       "schedule": "30 21 * * *"
