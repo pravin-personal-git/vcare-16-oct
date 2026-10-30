@@ -335,6 +335,9 @@ export async function pickInstallationLineSerials(scope: StoreScope, id: string,
   await serialLine(scope, id, it.product, units[0].serialNo, 0, userId, it.id);
   let srNo = last._max.srNo ?? 0;
   for (const u of units.slice(1)) await serialLine(scope, id, it.product, u.serialNo, ++srNo, userId);
+  // Already handed over: the warranty runs from that day, as Work done would have set it.
+  const done = await db.installationChallan.findUnique({ where: { id }, select: { handoverAt: true } });
+  if (done?.handoverAt) await db.stockUnit.updateMany({ where: { id: { in: units.map((u) => u.id) }, warrantyFrom: null }, data: { warrantyFrom: done.handoverAt } });
   await log(c.storeId, id, userId, 'Items', `${it.product.productName}: serials ${units.map((u) => u.serialNo).join(', ')}`);
 }
 
