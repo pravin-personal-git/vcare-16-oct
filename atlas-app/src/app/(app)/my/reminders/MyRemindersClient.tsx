@@ -15,6 +15,9 @@ import { deskAction, raiseDeskAction, reminderTargetsAction, teamFollowUpAction 
 import { MyRequestsTab, NewRequestModal, TeamTab, newestBy, oldestBy, uniq, type Desk } from './DeskParts';
 import { notificationsAction } from '@/app/actions/inbox';
 import type { DateRange } from '@/lib/date-ranges';
+import { KpiStrip } from '@/components/ui/KpiStrip';
+import { useListParams } from '@/components/ui/useListParams';
+import { DESK_CATEGORIES, NOTE_KINDS, ageTone, categoryOf } from '@/lib/desk-categories';
 
 /**
  * My Desk (was My Reminders & Requests; renamed and extended 27 Sep 2026,
@@ -38,6 +41,10 @@ const waited = (iso: string) => {
   const h = Math.floor((Date.now() - Date.parse(iso)) / 3_600_000);
   return h < 1 ? 'just now' : h < 48 ? `${h}h` : `${Math.floor(h / 24)} days`;
 };
+const AGE_BUCKETS = ['Over 7 days', '2 to 7 days', 'Under 2 days'];
+const ageBucket = (i: InboxItem) => { const t = ageTone(i.since); return t === 'danger' ? AGE_BUCKETS[0] : t === 'warning' ? AGE_BUCKETS[1] : AGE_BUCKETS[2]; };
+const AGE_TEXT = { danger: 'font-semibold text-danger', warning: 'font-semibold text-on-tint-warning' };
+const AGE_EDGE = { danger: 'border-s-4 border-s-danger', warning: 'border-s-4 border-s-warning' };
 
 export function MyRemindersClient({ initialTab, isOwner, singleStore }: { initialTab: string; isOwner: boolean; singleStore: boolean }) {
   const [tab, setTabState] = useState<Tab>((['waiting', 'reminders', 'requests', 'notifications', 'team'].includes(initialTab) ? initialTab : 'waiting') as Tab);
@@ -60,6 +67,7 @@ export function MyRemindersClient({ initialTab, isOwner, singleStore }: { initia
   const [desk, setDesk] = useState<Desk | null>(null);
   const [team, setTeam] = useState<Awaited<ReturnType<typeof teamFollowUpAction>> | null>(null);
   const [asking, setAsking] = useState(false);
+  const [reminding, setReminding] = useState<{ forUserId: string; title: string } | null>(null);
   // An owner sees everyone's pending items by default (4 Oct 2026). Until then
   // this was hard-coded off, so an owner only saw someone else's request after
   // it had sat for 48 hours and escalated - and could not see their own at all.
@@ -125,7 +133,7 @@ export function MyRemindersClient({ initialTab, isOwner, singleStore }: { initia
               add={(input) => run(() => addReminderAction(input), 'Reminder added.')} />
           )}
           {tab === 'requests' && <MyRequestsTab desk={desk} approvals={data.requests} onNew={() => setAsking(true)} />}
-          {tab === 'team' && isOwner && <TeamTab rows={team} />}
+          {tab === 'team' && isOwner && <TeamTab rows={team} onRemind={singleStore ? (forUserId, title) => setReminding({ forUserId, title }) : undefined} />}
           {tab === 'notifications' && (
             <NotificationsTab data={data.notifications} singleStore={singleStore}
               markAll={() => run(() => markReadAction('all'))} />
@@ -133,6 +141,10 @@ export function MyRemindersClient({ initialTab, isOwner, singleStore }: { initia
         </>
       )}
 
+      {reminding && (
+        <AddReminder preset={reminding} onClose={() => setReminding(null)}
+          onSave={(v) => { setReminding(null); run(() => addReminderAction(v), 'Reminder sent. It rings on their phone at that time.'); }} />
+      )}
       {asking && (
         <NewRequestModal options={desk?.options ?? null} singleStore={singleStore} busy={pending} onClose={() => setAsking(false)}
           onSend={(input) => {
@@ -159,6 +171,13 @@ function WaitingTab({ items, isOwner, everyone, setEveryone, decide, busy }: {
   const [rejecting, setRejecting] = useState<InboxItem[] | null>(null);
   const key = (i: InboxItem) => `${i.type}:${i.entityId}`;
   const chosen = items.filter((i) => picked.includes(key(i)));
+  // The category strip is the chip filter of the list below (same `q_c` address key).
+  const list = useListParams();
+  const cats = DESK_CATEGORIES.map((c) => {
+    const mine = items.filter((i) => categoryOf(i.type).key === c.key);
+    const oldest = mine[0] && mine.reduce((a, b) => (a.since < b.since ? a : b)).since;
+    return { ...c, count: mine.length, oldest };
+  }).filter((c) => c.count > 0 || c.key !== 'other');
 
   return (
     <SectionCard title="Waiting on me" icon="check-circle" bodyClassName="p-0"
@@ -171,6 +190,15 @@ function WaitingTab({ items, isOwner, everyone, setEveryone, decide, busy }: {
       {items.length === 0 ? (
         <EmptyState icon="check-circle" title="Nothing waiting on you" hint="New requests that need your decision appear here, newest first." />
       ) : (
+        <>
+        <div className="border-b border-border px-4 pt-3">
+          <KpiStrip columns={6} activeKey={list.get('q_c')} onSelect={(k) => list.set({ q_c: k })}
+            cards={cats.map((c) => ({
+              key: c.key, label: c.label, count: c.count, icon: c.icon,
+              tone: c.tone === 'neutral' ? 'default' : c.tone,
+              subLabel: c.oldest ? `oldest ${waited(c.oldest)}` : 'nothing waiting',
+            }))} />
+        </div>
         <ListFilter
           exportAs={{ title: 'Waiting on me', columns: [
             { header: 'What', value: (r) => r.title }, { header: 'Type', value: (r) => r.typeLabel },
@@ -182,11 +210,7 @@ function WaitingTab({ items, isOwner, everyone, setEveryone, decide, busy }: {
           noun="requests"
           placeholder="Who asked, what for, amount…"
           searchOn={(i) => [i.title, i.requesterName, i.typeLabel, i.summary, i.amountPaise ? rupees(i.amountPaise) : null, ...i.waitingOnNames]}
-          chipOf={(i) => i.typeLabel}
-          chipLabel="Request type"
-          chips={[...new Map(items.map((i) => [i.typeLabel, i])).keys()]
-            .sort()
-            .map((t) => ({ value: t, label: t, count: items.filter((i) => i.typeLabel === t).length }))}
+          chipOf={(i) => categoryOf(i.type).key}
           dates={[{ key: 'raised', label: 'Raised on', of: (i) => i.since }]}
           sorts={[
             { key: 'new', label: 'Newest first', compare: newestBy((i) => i.since) },
@@ -196,6 +220,8 @@ function WaitingTab({ items, isOwner, everyone, setEveryone, decide, busy }: {
             { key: 'who', label: 'Asked by A to Z', compare: (a, b) => a.requesterName.localeCompare(b.requesterName) },
           ]}
           selects={[
+            { key: 'type', label: 'Request type', of: (i) => i.typeLabel, options: uniq(items.map((i) => i.typeLabel)) },
+            { key: 'age', label: 'Waiting', of: ageBucket, options: AGE_BUCKETS },
             { key: 'by', label: 'Asked by', of: (i) => i.requesterName, options: uniq(items.map((i) => i.requesterName)) },
             { key: 'with', label: 'Stuck with', of: (i) => i.waitingOnNames[0] ?? 'Owner / admins', options: uniq(items.map((i) => i.waitingOnNames[0] ?? 'Owner / admins')) },
           ]}
@@ -212,6 +238,7 @@ function WaitingTab({ items, isOwner, everyone, setEveryone, decide, busy }: {
             )
           )}
         </ListFilter>
+        </>
       )}
       {rejecting && (
         <RejectDialog count={rejecting.length} onClose={() => setRejecting(null)}
@@ -242,21 +269,33 @@ function WaitingList({ items, picked, setPicked, chosen, decide, busy, setReject
               <Button size="sm" disabled={busy} onClick={() => setRejecting(chosen)}>Reject all</Button>
             </div>
           )}
+          {/* One block per category, in the strip's order; the chosen sort orders rows inside each. */}
+          {DESK_CATEGORIES.map((c) => ({ c, rows: items.filter((i) => categoryOf(i.type).key === c.key) })).filter((g) => g.rows.length).map(({ c, rows }) => (
+          <section key={c.key}>
+          <div className="flex items-center gap-2 border-b border-border bg-muted/30 px-4 py-1.5">
+            <Badge tone={c.tone} icon={c.icon}>{c.label}</Badge>
+            <span className="text-xs text-muted-foreground">{rows.length} waiting</span>
+            <button type="button" className="ms-auto text-xs font-medium text-brand hover:underline"
+              onClick={() => setPicked((p) => [...new Set([...p, ...rows.map(key)])])}>Select all {rows.length}</button>
+          </div>
           <ul>
-            {items.map((i) => (
-              <li key={key(i)} className="flex flex-wrap items-start gap-3 border-b border-border px-4 py-3 last:border-0">
+            {rows.map((i) => {
+              const age = ageTone(i.since);
+              return (
+              <li key={key(i)} className={`flex flex-wrap items-start gap-3 border-b border-border px-4 py-3 last:border-b-0 ${age ? AGE_EDGE[age] : ''}`}>
                 <input type="checkbox" className="mt-1" aria-label={`Select ${i.title}`} checked={picked.includes(key(i))}
                   onChange={(e) => setPicked((p) => (e.target.checked ? [...p, key(i)] : p.filter((x) => x !== key(i))))} />
                 <div className="min-w-0 flex-1">
                   <p className="flex flex-wrap items-center gap-1.5 text-sm font-medium">
                     {i.title}
-                    <Badge tone="neutral">{i.typeLabel}</Badge>
+                    <Badge tone={c.tone} icon={c.icon}>{i.typeLabel}</Badge>
                     {i.levels && i.levels > 1 && <Badge tone="info">Level {i.level} of {i.levels}</Badge>}
                     {i.raisedByMe && <Badge tone="warning">You raised this</Badge>}
                     {i.asOwner && !i.raisedByMe && <Badge tone="warning">Admin view</Badge>}
                   </p>
                   <p className="text-xs text-muted-foreground">
-                    Raised by {i.requesterName} · waiting {waited(i.since)}{i.summary ? ` · ${i.summary}` : ''}{i.amountPaise ? ` · ${rupees(i.amountPaise)}` : ''}
+                    {/* '-' = no creator saved (records brought over from the old system). */}
+                    Raised by {i.requesterName === '-' ? 'not recorded' : i.requesterName} · <span className={age ? AGE_TEXT[age] : ''}>waiting {waited(i.since)}</span>{i.summary ? ` · ${i.summary}` : ''}{i.amountPaise ? ` · ${rupees(i.amountPaise)}` : ''}
                   </p>
                   <p className="text-xs">
                     <span className="text-muted-foreground">Stuck with </span>
@@ -270,8 +309,11 @@ function WaitingList({ items, picked, setPicked, chosen, decide, busy, setReject
                   <Button size="sm" variant="primary" disabled={busy} onClick={() => decide(i, 'approved', null)}>Approve</Button>
                 </div>
               </li>
-            ))}
+              );
+            })}
           </ul>
+          </section>
+          ))}
         </>
   );
 }
@@ -387,13 +429,17 @@ function RemindersTab({ reminders, act, add, busy, singleStore }: {
   );
 }
 
-function AddReminder({ onClose, onSave }: { onClose: () => void; onSave: (v: { title: string; note: string | null; dueAt: string; repeat: string; forUserId: string | null }) => void }) {
+function AddReminder({ onClose, onSave, preset }: {
+  onClose: () => void; onSave: (v: { title: string; note: string | null; dueAt: string; repeat: string; forUserId: string | null }) => void;
+  /** Team follow-up's Remind: the person and the words filled in. */
+  preset?: { forUserId: string; title: string };
+}) {
   // Decision 12 (13 Oct 2026): yourself always; a manager their team; the owner anybody.
   const [targets, setTargets] = useState<{ id: string; name: string; self: boolean }[]>([]);
-  const [forUserId, setForUserId] = useState('');
+  const [forUserId, setForUserId] = useState(preset?.forUserId ?? '');
   useEffect(() => { reminderTargetsAction().then(setTargets).catch(() => undefined); }, []);
   const tomorrow = new Date(Date.now() + 86_400_000).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
-  const [title, setTitle] = useState('');
+  const [title, setTitle] = useState(preset?.title ?? '');
   const [note, setNote] = useState('');
   const [date, setDate] = useState(tomorrow);
   const [time, setTime] = useState('10:00');
@@ -433,11 +479,7 @@ function AddReminder({ onClose, onSave }: { onClose: () => void; onSave: (v: { t
 
 // ------------------------------------------------------------------ Notifications
 
-const KINDS: [string, string][] = [
-  ['approval_waiting', 'Approvals waiting on me'], ['approval_decided', 'Decisions on my requests'], ['escalation', 'Escalations'],
-  ['renewal', 'Renewals & due dates'], ['reminder', 'My reminders'], ['system', 'Morning summary'], ['job', 'Field jobs'],
-  ['shop_request', 'Online shop requests'],
-];
+const KINDS: [string, string][] = Object.entries(NOTE_KINDS).map(([k, v]) => [k, v.label]);
 
 function NotificationsTab({ data, markAll, singleStore }: { data: Inbox['notifications']; markAll: () => void; singleStore: boolean }) {
   const [prefs, setPrefs] = useState<Awaited<ReturnType<typeof myChannelsAction>>>(null);
@@ -515,7 +557,10 @@ function NotificationsTab({ data, markAll, singleStore }: { data: Inbox['notific
                           <p className="text-sm font-medium">{n.title}</p>
                         </Link>
                         {n.body && <p className="whitespace-pre-line text-xs text-muted-foreground">{n.body}</p>}
-                        <p className="text-xs text-muted-foreground">{kindLabel(n.kind)} · {when(n.createdAt)}</p>
+                        <p className="mt-0.5 flex items-center gap-1.5 text-xs text-muted-foreground">
+                          <Badge tone={NOTE_KINDS[n.kind]?.tone ?? 'neutral'} icon={NOTE_KINDS[n.kind]?.icon}>{kindLabel(n.kind)}</Badge>
+                          {when(n.createdAt)}
+                        </p>
                       </li>
                     ))}
                   </ul>

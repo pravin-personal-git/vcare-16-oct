@@ -4,6 +4,7 @@
     "bom1"
   ],
   "framework": "nextjs",
+  "ignoreCommand": "[ \"$VERCEL_ENV\" != \"production\" ]",
   "crons": [
     {
       "path": "/api/cron/phone-health",

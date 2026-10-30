@@ -33,6 +33,43 @@ const CASES: [string, string][] = [
   ['naya customer add karna hai', 'customer-new'],
   ['amc kaise banaye', 'amc-new'],
   ['technician phone pe kaam kaise dekhe', 'tech-phone'],
+  // 30 Oct 2026: the everyday questions the first 38 guides could not answer.
+  ['product ko quantity se serial tracking me kaise badle', 'product-tracking'],
+  ['product jo quantity se track ho rahi hai usko serial se track kaise kare', 'product-tracking'],
+  ['attendance kaise lagaye phone se', 'phone-attendance'],
+  ['Your location could not be read. Turn on location and try again.', 'phone-attendance'],
+  ['You have already finished for today.', 'phone-attendance'],
+  ['clock out karna bhool gaya', 'phone-attendance'],
+  ['app update kaise kare naya version', 'phone-update'],
+  ['phone pe call record nahi ho rahe', 'phone-setup'],
+  ['location override kya hai', 'job-site-override'],
+  ['field job close kiya par approval me atka hai', 'approval-waiting'],
+  ['approval kaun deta hai', 'approval-waiting'],
+  ['my desk me approve kaise kare', 'approval-desk'],
+  ['outbox me pending kya hai', 'phone-outbox'],
+  ['Pick a branch first (top bar).', 'error-single-store'],
+  ['Issuing parts needs stock rights (Roles > Stock: Edit).', 'error-permission'],
+  ['challan approve hone se pehle edit kaise kare', 'challan-change'],
+  ['galat serial issue ho gaya badalna hai', 'serial-change'],
+  ['serial number se product kaise dhundhe', 'serial-find'],
+  ['order cancel kaise kare', 'order-cancel'],
+  ['has been invoiced. Cancel the invoice first.', 'order-cancel'],
+  ['bill galat ban gaya edit kaise kare', 'invoice-cancel-edit'],
+  ['quotation edit nahi ho raha', 'quotation-converted'],
+  ['stock ginti adjust kaise kare', 'stock-adjust'],
+  ['leave kaise apply kare', 'leave-request'],
+  ['customer ka ledger kaise dekhe', 'payment-due'],
+];
+
+/**
+ * Questions with no guide yet: they must NOT get a confident answer, because a
+ * wrong guide followed step by step is worse than "samajh nahi aaya".
+ */
+const UNANSWERED = [
+  'naya user kaise banaye', 'kisi ko permission kaise de role', 'credit note kaise banaye',
+  'supplier ka bill kaise dale', 'supplier ko payment kaise kare', 'purchase return kaise kare',
+  'salary slip kaha milegi', 'gst report kaha hai', 'office kharcha kaise dale',
+  'van me maal kaise load kare', 'excel se product import kaise kare', 'reminder kaise lagaye',
 ];
 
 let ok = 0;
@@ -45,6 +82,9 @@ for (const [q, want] of CASES) {
   console.log(`${pass ? (sure ? 'ok  ' : 'ok? ') : 'FAIL'} ${q.padEnd(58)} -> ${got ?? '-'} (${(hits[0]?.score ?? 0).toFixed(2)})${pass ? '' : `  want ${want}; then ${hits.slice(1).map((h) => h.article.id).join(', ')}`}`);
 }
 console.log(`\n${ok}/${CASES.length} land on the right guide`);
+const sureWrong = UNANSWERED.filter((q) => (search(q, HELP)[0]?.score ?? 0) >= CONFIDENT);
+for (const q of sureWrong) console.log(`WRONG-SURE ${q} -> ${search(q, HELP)[0].article.id}`);
+assert.equal(sureWrong.length, 0, 'a question with no guide must not get a confident answer');
 assert.equal(new Set(HELP.map((a) => a.id)).size, HELP.length, 'guide ids must be unique');
 for (const a of HELP) for (const r of a.related ?? []) assert.ok(HELP.some((b) => b.id === r), `${a.id} relates to missing ${r}`);
 // Every screenshot a guide names is in public/help (the chat shows it without checking).
