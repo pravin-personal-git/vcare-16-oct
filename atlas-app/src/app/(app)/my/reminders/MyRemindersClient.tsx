@@ -103,9 +103,13 @@ export function MyRemindersClient({ initialTab, isOwner, singleStore }: { initia
       <PageHeader badge="MD" title="My Desk" subtitle="Ask for leave or anything else, see what waits on you, your reminders and notifications"
         actions={<Button variant="primary" icon="plus" onClick={() => setAsking(true)}>New request</Button>} />
       {msg && (
-        <Card className={`mb-3 p-3 text-sm ${msg.tone === 'err' ? 'border-danger/40 bg-danger/5 text-danger' : 'border-success/40 bg-success/5 text-success'}`}>
-          <span role={msg.tone === 'err' ? 'alert' : 'status'}>{msg.text}</span>
-        </Card>
+        // Scrolled to when it appears: an Approve far down the list used to fail
+        // with this banner off screen, and looked like nothing happened (30 Oct 2026).
+        <div ref={(el) => el?.scrollIntoView({ behavior: 'smooth', block: 'center' })} key={msg.text}>
+          <Card className={`mb-3 p-3 text-sm ${msg.tone === 'err' ? 'border-danger/40 bg-danger/5 text-danger' : 'border-success/40 bg-success/5 text-success'}`}>
+            <span role={msg.tone === 'err' ? 'alert' : 'status'}>{msg.text}</span>
+          </Card>
+        </div>
       )}
 
       <nav aria-label="Sections" className="mb-4 flex gap-1 overflow-x-auto rounded-lg border border-border bg-card p-1">
@@ -169,6 +173,7 @@ function WaitingTab({ items, isOwner, everyone, setEveryone, decide, busy }: {
 }) {
   const [picked, setPicked] = useState<string[]>([]);
   const [rejecting, setRejecting] = useState<InboxItem[] | null>(null);
+  const [approving, setApproving] = useState<InboxItem | null>(null);
   const key = (i: InboxItem) => `${i.type}:${i.entityId}`;
   const chosen = items.filter((i) => picked.includes(key(i)));
   // The category strip is the chip filter of the list below (same `q_c` address key).
@@ -233,12 +238,16 @@ function WaitingTab({ items, isOwner, everyone, setEveryone, decide, busy }: {
             ) : (
               <WaitingList
                 items={shown} picked={picked} setPicked={setPicked}
-                chosen={chosen} decide={decide} busy={busy} setRejecting={setRejecting}
+                chosen={chosen} decide={decide} busy={busy} setRejecting={setRejecting} setApproving={setApproving}
               />
             )
           )}
         </ListFilter>
         </>
+      )}
+      {approving && (
+        <ApproveNoteDialog item={approving} onClose={() => setApproving(null)}
+          onApprove={(note) => { decide(approving, 'approved', note); setApproving(null); setPicked((p) => p.filter((k) => k !== key(approving))); }} />
       )}
       {rejecting && (
         <RejectDialog count={rejecting.length} onClose={() => setRejecting(null)}
@@ -249,7 +258,7 @@ function WaitingTab({ items, isOwner, everyone, setEveryone, decide, busy }: {
 }
 
 /** The rows themselves - split out so `ListFilter` wraps only the list. */
-function WaitingList({ items, picked, setPicked, chosen, decide, busy, setRejecting }: {
+function WaitingList({ items, picked, setPicked, chosen, decide, busy, setRejecting, setApproving }: {
   items: InboxItem[];
   picked: string[];
   setPicked: React.Dispatch<React.SetStateAction<string[]>>;
@@ -257,16 +266,21 @@ function WaitingList({ items, picked, setPicked, chosen, decide, busy, setReject
   decide: (i: InboxItem, d: 'approved' | 'rejected', note: string | null) => void;
   busy: boolean;
   setRejecting: (items: InboxItem[]) => void;
+  setApproving: (item: InboxItem) => void;
 }) {
   const key = (i: InboxItem) => `${i.type}:${i.entityId}`;
+  // Items that need a note (a call-back) are approved one by one, never in bulk.
+  const needNote = chosen.filter((i) => i.noteToApprove);
 
   return (
         <>
           {chosen.length > 0 && (
             <div className="flex flex-wrap items-center gap-2 border-b border-border bg-muted/30 px-4 py-2 text-xs">
               <span className="font-medium">{chosen.length} selected</span>
-              <Button size="sm" variant="primary" disabled={busy} onClick={() => { chosen.forEach((i) => decide(i, 'approved', null)); setPicked([]); }}>Approve all</Button>
+              <Button size="sm" variant="primary" disabled={busy || needNote.length === chosen.length}
+                onClick={() => { chosen.filter((i) => !i.noteToApprove).forEach((i) => decide(i, 'approved', null)); setPicked(needNote.map(key)); }}>Approve all</Button>
               <Button size="sm" disabled={busy} onClick={() => setRejecting(chosen)}>Reject all</Button>
+              {needNote.length > 0 && <span className="text-on-tint-warning">{needNote.length} need a note of your call - approve {needNote.length === 1 ? 'it' : 'them'} one by one.</span>}
             </div>
           )}
           {/* One block per category, in the strip's order; the chosen sort orders rows inside each. */}
@@ -306,7 +320,7 @@ function WaitingList({ items, picked, setPicked, chosen, decide, busy, setReject
                 <div className="flex shrink-0 items-center gap-1.5">
                   <Link href={i.href} className="rounded-lg border border-border px-2.5 py-1 text-xs hover:bg-muted">Open</Link>
                   <Button size="sm" disabled={busy} onClick={() => setRejecting([i])}>Reject</Button>
-                  <Button size="sm" variant="primary" disabled={busy} onClick={() => decide(i, 'approved', null)}>Approve</Button>
+                  <Button size="sm" variant="primary" disabled={busy} onClick={() => (i.noteToApprove ? setApproving(i) : decide(i, 'approved', null))}>Approve</Button>
                 </div>
               </li>
               );
@@ -315,6 +329,19 @@ function WaitingList({ items, picked, setPicked, chosen, decide, busy, setReject
           </section>
           ))}
         </>
+  );
+}
+
+/** Approve with the note the approval needs - InboxItem.noteToApprove (30 Oct 2026). */
+function ApproveNoteDialog({ item, onClose, onApprove }: { item: InboxItem; onClose: () => void; onApprove: (note: string) => void }) {
+  const [note, setNote] = useState('');
+  return (
+    <Modal title={`Approve: ${item.title}`} icon="check-circle" size="sm" onClose={onClose}
+      footer={<><Button onClick={onClose}>Cancel</Button><Button variant="primary" disabled={!note.trim()} onClick={() => onApprove(note.trim())}>Approve</Button></>}>
+      <Field label={item.noteToApprove ?? 'Note'} required htmlFor="approve-note" hint="Kept on the job.">
+        <textarea id="approve-note" rows={3} autoFocus value={note} onChange={(e) => setNote(e.target.value)} className="field-input" />
+      </Field>
+    </Modal>
   );
 }
 

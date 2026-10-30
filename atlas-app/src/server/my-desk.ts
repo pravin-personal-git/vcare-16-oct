@@ -8,7 +8,7 @@ import { requestCompOff, requestLeaveAllocation } from './leave-types';
 import { requestLeaveEncashment, requestReimbursement } from './staff-claims';
 import { requestAsset } from './assets';
 import { submitResignation } from './offboarding';
-import { currentApprovers } from './approvals';
+import { currentApprovers, directItems } from './approvals';
 import { requestType } from '@/lib/approval-rules';
 
 /**
@@ -304,6 +304,25 @@ export async function teamFollowUp(scope: StoreScope): Promise<TeamFollowUpRow[]
       if (list) list.push(item); else waiting.set(id, [item]);
     }
   }
+  // And the items with no request - close job, location override and the
+  // rest - on everyone who may decide them, the same list Waiting on me shows.
+  for (const storeId of storeIds) {
+    for (const d of await directItems(storeId, open)) {
+      const p = d.item;
+      if (p.requesterId && !nameOf.has(p.requesterId)) nameOf.set(p.requesterId, (await db.user.findUnique({ where: { id: p.requesterId }, select: { fullName: true } }))?.fullName ?? 'Someone');
+      const item: TeamApproval = {
+        requestId: `${d.type}:${p.id}`, title: p.title, type: d.type, typeLabel: d.label,
+        requesterName: p.requesterId ? nameOf.get(p.requesterId) ?? 'Someone' : '-', amountPaise: p.amountPaise,
+        since: p.since.toISOString(), href: d.href,
+      };
+      for (const id of d.deciders) {
+        const list = waiting.get(id);
+        if (list) list.push(item); else waiting.set(id, [item]);
+      }
+    }
+  }
+  // Oldest first again, now that the two kinds are mixed.
+  for (const list of waiting.values()) list.sort((a, b) => Date.parse(a.since) - Date.parse(b.since));
   // One row per person and kind: add up the total and keep the oldest.
   const u = new Map<string, { total: number; oldest: Date | null; byKind: Record<string, number> }>();
   for (const r of unread) {

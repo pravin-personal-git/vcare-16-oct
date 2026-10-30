@@ -234,6 +234,8 @@ export interface ApprovalItem {
   requestId: string | null; type: string; typeLabel: string; entityId: string; title: string; summary: string | null;
   amountPaise: number | null; requesterName: string; level: number; levels: number | null; since: string;
   waitingOnNames: string[]; raisedByMe: boolean; asOwner: boolean;
+  /** Approving needs this note first - a close without the customer's code (30 Oct 2026). Absent on older servers. */
+  noteToApprove?: string | null;
 }
 export const waitingApprovals = () => authed<{ items: ApprovalItem[]; isOwner: boolean }>('/api/v1/approvals');
 export const decideApproval = (body: { type: string; entityId: string; decision: 'approved' | 'rejected'; note?: string | null }) =>

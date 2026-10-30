@@ -22,6 +22,8 @@ export default function Approvals() {
   const load = useCallback(() => waitingApprovals(), []);
   const { data, error: loadError, loading, reload } = useLoad(load);
   const [rejecting, setRejecting] = useState<string | null>(null);
+  // An approval that needs a note (the call to the customer) asks for it first.
+  const [noting, setNoting] = useState<string | null>(null);
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -30,11 +32,12 @@ export default function Approvals() {
   const key = (i: ApprovalItem) => `${i.type}:${i.entityId}`;
   const decide = async (i: ApprovalItem, decision: 'approved' | 'rejected') => {
     if (decision === 'rejected' && !note.trim()) { setError(t('Say why it is being rejected.')); return; }
+    if (decision === 'approved' && i.noteToApprove && !note.trim()) { setNoting(key(i)); setRejecting(null); setError(null); return; }
     setBusy(key(i)); setError(null); setDone(null);
     try {
-      const r = await decideApproval({ type: i.type, entityId: i.entityId, decision, note: decision === 'rejected' ? note.trim() : null });
+      const r = await decideApproval({ type: i.type, entityId: i.entityId, decision, note: decision === 'rejected' || i.noteToApprove ? note.trim() : null });
       if (!r) return;
-      setDone(t(r.message)); setRejecting(null); setNote(''); await reload();
+      setDone(t(r.message)); setRejecting(null); setNoting(null); setNote(''); await reload();
     } catch (e) {
       setError(e instanceof Error ? e.message : t('Could not save the decision.'));
     } finally { setBusy(null); }
@@ -60,6 +63,9 @@ export default function Approvals() {
             {rejecting === key(i) && (
               <Field label={t('Reason (they will see it)')} value={note} onChangeText={setNote} multiline />
             )}
+            {noting === key(i) && i.noteToApprove && (
+              <Field label={t(i.noteToApprove)} value={note} onChangeText={setNote} multiline />
+            )}
             <View style={{ flexDirection: 'row', gap: space.sm }}>
               {rejecting === key(i) ? (
                 <>
@@ -68,7 +74,7 @@ export default function Approvals() {
                 </>
               ) : (
                 <>
-                  <Button style={{ flex: 1 }} variant="secondary" label={t('Reject')} onPress={() => { setRejecting(key(i)); setNote(''); setError(null); }} />
+                  <Button style={{ flex: 1 }} variant="secondary" label={t('Reject')} onPress={() => { setRejecting(key(i)); setNoting(null); setNote(''); setError(null); }} />
                   <Button style={{ flex: 1 }} icon="check" label={t('Approve')} loading={busy === key(i)} onPress={() => decide(i, 'approved')} />
                 </>
               )}

@@ -270,7 +270,52 @@ export interface InboxItem {
   waitingOnNames: string[];
   /** The person looking raised it themselves. Only an owner can decide these. */
   raisedByMe: boolean;
+  /**
+   * Approving needs a note, and this is what to ask (30 Oct 2026): a job the
+   * technician closed "customer approved" without the code needs the call
+   * written down. Approve without it used to fail with a banner at the top of
+   * My Desk that nobody saw (Prachi, CMP-DURG001-2026-0041).
+   */
+  noteToApprove: string | null;
 }
+
+/**
+ * Items with no open request - decided on their own screen - in one branch,
+ * each with who may decide it: the owners, plus, for field jobs, everyone
+ * whose role has Complaints: Approve. Shared by My Desk's Waiting on me and
+ * Team follow-up so the two never count differently (30 Oct 2026: Team
+ * follow-up counted only requests, and Vcare's waiting items are nearly all
+ * of this kind).
+ * shortcut: deciders come from roles, not a person's own access switches; read the full context if those start granting Approve.
+ */
+export async function directItems(storeId: string, open: { entityType: string; entityId: string }[]) {
+  const owners = await ownersOf(storeId);
+  const out: { type: string; label: string; href: string; item: Awaited<ReturnType<NonNullable<ReturnType<typeof approvalHandler>>['pendingDirect']>>[number]; deciders: string[] }[] = [];
+  for (const t of REQUEST_TYPES) {
+    const h = approvalHandler(t.key);
+    if (!h) continue;
+    const pending = await h.pendingDirect(storeId).catch(() => []);
+    if (!pending.length) continue;
+    const perm = DIRECT_DECIDERS[t.key];
+    const holders = perm
+      ? (await db.userStoreRole.findMany({ where: { storeId, user: { isActive: true }, role: { permissions: { some: { permission: { key: perm } } } } }, select: { userId: true } })).map((r) => r.userId)
+      : [];
+    const deciders = [...new Set([...owners, ...holders])];
+    for (const p of pending) {
+      if (open.some((r) => r.entityType === t.key && r.entityId === p.id)) continue;
+      out.push({ type: t.key, label: t.label, href: t.href(p.id), item: p, deciders });
+    }
+  }
+  return out;
+}
+
+/** What to ask before approving, per item - see InboxItem.noteToApprove. */
+async function notesToApprove(items: { type: string; entityId: string }[]): Promise<Set<string>> {
+  const ids = items.filter((i) => i.type === 'job_close').map((i) => i.entityId);
+  if (!ids.length) return new Set();
+  return new Set((await db.complaint.findMany({ where: { id: { in: ids }, needsCallback: true }, select: { id: true } })).map((c) => c.id));
+}
+const CALL_NOTE = 'The technician closed this without the customer\'s code. Call the customer - what did they say?';
 
 /**
  * Items with no Approval Rule (no open request) go to the owner - and, for
@@ -313,30 +358,27 @@ export async function waitingOn(scope: StoreScope, userId: string, opts: { every
       requesterName: await nameOf(r.requestedBy), level: r.currentLevel,
       levels: rule ? applicableLevels(rule, r.amountPaise).length : null,
       since: r.createdAt.toISOString(), href: r.href ?? requestType(r.entityType)?.href(r.entityId) ?? '/',
-      asOwner: !mine, waitingOnNames, raisedByMe: r.requestedBy === userId,
+      asOwner: !mine, waitingOnNames, raisedByMe: r.requestedBy === userId, noteToApprove: null,
     });
   }
 
   // Items with no open request (decided on their own screen): the owner's to decide.
   for (const storeId of storeIds) {
     const isOwner = (await ownersOf(storeId)).includes(userId);
-    for (const t of REQUEST_TYPES) {
-      const perm = DIRECT_DECIDERS[t.key];
+    for (const d of await directItems(storeId, open)) {
+      const perm = DIRECT_DECIDERS[d.type];
       if (!isOwner && !(perm && opts.permissions?.has(perm))) continue;
-      const h = approvalHandler(t.key);
-      if (!h) continue;
-      const pending = await h.pendingDirect(storeId).catch(() => []);
-      for (const p of pending) {
-        if (open.some((r) => r.entityType === t.key && r.entityId === p.id)) continue;
-        items.push({
-          requestId: null, type: t.key, typeLabel: t.label, entityId: p.id, title: p.title, summary: p.summary,
-          amountPaise: p.amountPaise, requesterName: p.requesterId ? await nameOf(p.requesterId) : '-', level: 1, levels: null,
-          since: p.since.toISOString(), href: t.href(p.id), asOwner: false,
-          waitingOnNames: [], raisedByMe: p.requesterId === userId,
-        });
-      }
+      const p = d.item;
+      items.push({
+        requestId: null, type: d.type, typeLabel: d.label, entityId: p.id, title: p.title, summary: p.summary,
+        amountPaise: p.amountPaise, requesterName: p.requesterId ? await nameOf(p.requesterId) : '-', level: 1, levels: null,
+        since: p.since.toISOString(), href: d.href, asOwner: false,
+        waitingOnNames: [], raisedByMe: p.requesterId === userId, noteToApprove: null,
+      });
     }
   }
+  const needNote = await notesToApprove(items);
+  for (const i of items) if (i.type === 'job_close' && needNote.has(i.entityId)) i.noteToApprove = CALL_NOTE;
   return items.sort((a, b) => Date.parse(a.since) - Date.parse(b.since));
 }
 
