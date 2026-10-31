@@ -7,7 +7,7 @@ import { addSiteForJob, listSites, SiteError } from '@/server/sites';
 import type { SiteInput } from '@/lib/sites';
 import {
   listComplaints, getComplaintDetail, createComplaint, assignTechnician, setResolutionType,
-  updateComplaintStatus, addComplaintNote, listServiceVisits, scheduleVisit, scheduleInstallationVisit, completeVisit, rescheduleVisit, cancelVisit,
+  updateComplaintStatus, changeComplaintSite, addComplaintNote, listServiceVisits, scheduleVisit, scheduleInstallationVisit, completeVisit, rescheduleVisit, cancelVisit,
   listRepairChallans, listTechnicians, listCustomerPurchases,
   listFieldConfigs, saveFieldConfig, removeFieldConfig, fieldCheckIn, ComplaintError, updateRepairChallan,
   type CreateComplaintInput, type FieldConfigInput, type FieldCheckInInput, type UpdateChallanInput,
@@ -248,6 +248,13 @@ export async function updateComplaintStatusAction(complaintId: string, status: s
   return guard(async () => {
     const ctx = await requireContext();
     await updateComplaintStatus(ctx.scope, complaintId, status, ctx.user.id, 'office', reason, ctx.permissions);
+  });
+}
+
+export async function changeComplaintSiteAction(complaintId: string, input: { siteId: string | null; otherPlace: boolean; text: string | null }): Promise<ActionState> {
+  return guard(async () => {
+    const ctx = await requireContext();
+    await changeComplaintSite(ctx.scope, complaintId, input, ctx.user.id);
   });
 }
 

@@ -277,6 +277,11 @@ export interface InboxItem {
    * My Desk that nobody saw (Prachi, CMP-DURG001-2026-0041).
    */
   noteToApprove: string | null;
+  /**
+   * A location override that would save a NEW site (31 Oct 2026, Vcare): the
+   * approver names the place in the row, and the name rides on the approval note.
+   */
+  nameSite?: boolean;
 }
 
 /**
@@ -379,6 +384,9 @@ export async function waitingOn(scope: StoreScope, userId: string, opts: { every
   }
   const needNote = await notesToApprove(items);
   for (const i of items) if (i.type === 'job_close' && needNote.has(i.entityId)) i.noteToApprove = CALL_NOTE;
+  const { overridesNeedingSiteName } = await import('./job-onsite');
+  const nameSite = await overridesNeedingSiteName(storeIds, items.filter((i) => i.type === 'site_override').map((i) => i.entityId));
+  for (const i of items) if (i.type === 'site_override' && nameSite.has(i.entityId)) i.nameSite = true;
   return items.sort((a, b) => Date.parse(a.since) - Date.parse(b.since));
 }
 

@@ -19,7 +19,7 @@ import type { SplitCover } from '@/lib/amc-coverage';
 import type { ComplaintDetail } from '@/server/complaints';
 import {
   addComplaintNoteAction, assignTechnicianAction, setResolutionTypeAction, updateComplaintStatusAction, rescheduleVisitAction, cancelVisitAction, completeVisitAction,
-  logFaultyPartAction, raiseJobChallanAction, addComplaintItemAction, cancelComplaintItemAction, requestWarrantyVoidAction, pickUpItemsAction, handBackItemsAction,
+  logFaultyPartAction, raiseJobChallanAction, addComplaintItemAction, changeComplaintSiteAction, cancelComplaintItemAction, requestWarrantyVoidAction, pickUpItemsAction, handBackItemsAction,
 } from '../../actions';
 import type { ComplaintItemView } from '@/server/complaint-items';
 import type { HandBackOption } from '@/server/item-handback';
@@ -37,6 +37,7 @@ import { DetailHeader } from '@/components/document/DetailHeader';
 import { ActionBar } from '@/components/document/ActionBar';
 import { customerLinkAction } from '../../actions';
 import { QuickVisitDialog } from '@/components/services/QuickVisitDialog';
+import { SiteDialog } from '@/components/services/SitePicker';
 import { ReassignReason } from '@/components/services/ReassignReason';
 import { RMA_OUTCOME_LABEL, SUPPLIER_ANSWER_LABEL, type RmaOutcome, type SupplierAnswer } from '@/lib/rma';
 
@@ -159,6 +160,7 @@ export function ComplaintView({ detail: d, coverage, technicians, legacyTechnici
   const [pickingUp, setPickingUp] = useState(false);
   const [handingBack, setHandingBack] = useState(false);
   const [booking, setBooking] = useState(false);
+  const [changingSite, setChangingSite] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const liveItems = items.filter((i) => i.status !== 'cancelled');
   // Only an item of ours whose warranty is running can have it voided.
@@ -312,6 +314,10 @@ export function ComplaintView({ detail: d, coverage, technicians, legacyTechnici
           if (r.gdnNo) setNotice(`Handed back on ${r.gdnNo}.${r.warnings?.length ? ` ${r.warnings.join(' ')}` : ''} Book the refit visit if the technician has to fit it.`);
           return r;
         }); }} />}
+      {changingSite && (
+        <SiteDialog customerId={d.customerId} current={{ id: d.siteId, text: d.siteLocation }} onClose={() => setChangingSite(false)}
+          onSave={(v) => { setChangingSite(false); run(() => changeComplaintSiteAction(d.id, v)); }} />
+      )}
       {takingOff && <ReasonDialog title={`Take ${takingOff.equipmentName} off this complaint?`} busy={pending} onClose={() => setTakingOff(null)}
         onConfirm={(reason) => { const it = takingOff; setTakingOff(null); run(() => cancelComplaintItemAction(it.id, reason)); }} />}
       {logging && parts && <LogFaulty catalogue={parts.catalogue} busy={pending} onClose={() => setLogging(false)}
@@ -325,11 +331,17 @@ export function ComplaintView({ detail: d, coverage, technicians, legacyTechnici
             <p className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted-foreground">
               <a href={`tel:${d.customerPhone}`} className="inline-flex items-center gap-1 hover:text-brand"><Icon name="phone" className="h-3.5 w-3.5" />{d.customerPhone}</a>
               {d.productName && <span className="inline-flex items-center gap-1"><Icon name="package" className="h-3.5 w-3.5" />{d.productName}</span>}
-              {(d.siteLocation || mapsHref) && (
+              {(d.siteLocation || mapsHref || canEdit) && (
                 <span className="inline-flex items-center gap-1">
                   <Icon name="map-pin" className="h-3.5 w-3.5" />
-                  {d.siteLocation ?? 'Site'}
+                  {d.siteLocation ?? (mapsHref ? 'Site' : 'No site')}
                   {mapsHref && <a href={mapsHref} target="_blank" rel="noreferrer noopener" className="ms-1 font-medium text-brand hover:underline">Map</a>}
+                  {/* Raised without a site, or on the wrong one (31 Oct 2026). */}
+                  {canEdit && (
+                    <button type="button" onClick={() => setChangingSite(true)} className="ms-1 font-medium text-brand hover:underline">
+                      {d.siteId || d.siteLocation ? 'Change' : 'Add site'}
+                    </button>
+                  )}
                 </span>
               )}
             </p>

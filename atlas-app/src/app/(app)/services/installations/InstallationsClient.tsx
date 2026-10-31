@@ -29,7 +29,7 @@ import {
 type Challan = {
   id: string; challanNo: string; legacyRef: string | null; status: string; stage: string; priority: string;
   physicalChallanNo: string | null; technicianRemark: string | null; note: string | null;
-  siteLocation?: string | null; sitePin?: { lat: number; lng: number } | null;
+  siteLocation?: string | null; sitePin?: { lat: number; lng: number } | null; siteName?: string | null;
   isInvoiced?: boolean; invoice?: { id: string; invoiceNo: string } | null;
   rejectionReason: string | null; salesOrderId: string | null; orderNo: string | null;
   partyId?: string | null; customerName: string | null; itemCount: number; totalQty: number;
@@ -170,26 +170,25 @@ export function InstallationsClient({
                     )}
                   </div>
 
-                  <p className="mt-1 text-sm font-medium">
-                    {c.customerName ? <CustomerLink id={c.partyId}>{c.customerName}</CustomerLink> : 'No customer on file'}
-                    {/* G-28: the order and the invoice open themselves. */}
-                    {c.orderNo && c.salesOrderId && <span className="text-muted-foreground"> - order <Link href={`/sales/orders/${c.salesOrderId}`} className="font-mono text-brand hover:underline">{c.orderNo}</Link></span>}
-                    {c.invoice && <span className="text-muted-foreground"> - billed on <Link href={`/invoices/${c.invoice.id}`} className="font-mono text-brand hover:underline">{c.invoice.invoiceNo}</Link></span>}
-                  </p>
+                  {/* Who and where side by side (31 Oct 2026): the site box sits in one column on every card. */}
+                  <div className="mt-1 flex flex-wrap items-center gap-x-6 gap-y-2">
+                    <div className="min-w-0 sm:w-96">
+                      <p className="text-sm font-medium">
+                        {c.customerName ? <CustomerLink id={c.partyId}>{c.customerName}</CustomerLink> : 'No customer on file'}
+                        {/* G-28: the order and the invoice open themselves. */}
+                        {c.orderNo && c.salesOrderId && <span className="text-muted-foreground"> - order <Link href={`/sales/orders/${c.salesOrderId}`} className="font-mono text-brand hover:underline">{c.orderNo}</Link></span>}
+                        {c.invoice && <span className="text-muted-foreground"> - billed on <Link href={`/invoices/${c.invoice.id}`} className="font-mono text-brand hover:underline">{c.invoice.invoiceNo}</Link></span>}
+                      </p>
 
-                  <p className="text-xs text-muted-foreground">
-                    {c.itemCount} {c.itemCount === 1 ? 'line' : 'lines'}, {c.totalQty} {c.totalQty === 1 ? 'unit' : 'units'}
-                    {c.assignees.length > 0 && ` - ${c.assignees.join(', ')}`}
-                    {/* Only when it differs. For most migrated rows the two are the same string. */}
-                    {c.legacyRef && c.legacyRef !== c.challanNo && ` - was ${c.legacyRef}`}
-                  </p>
-
-                  {(c.siteLocation || c.sitePin) && (
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      Site: {c.siteLocation ?? 'pin only'}
-                      {c.sitePin && <> · <a href={`https://www.google.com/maps?q=${c.sitePin.lat},${c.sitePin.lng}`} target="_blank" rel="noreferrer noopener" className="text-brand hover:underline">Map</a></>}
-                    </p>
-                  )}
+                      <p className="text-xs text-muted-foreground">
+                        {c.itemCount} {c.itemCount === 1 ? 'line' : 'lines'}, {c.totalQty} {c.totalQty === 1 ? 'unit' : 'units'}
+                        {c.assignees.length > 0 && ` - ${c.assignees.join(', ')}`}
+                        {/* Only when it differs. For most migrated rows the two are the same string. */}
+                        {c.legacyRef && c.legacyRef !== c.challanNo && ` - was ${c.legacyRef}`}
+                      </p>
+                    </div>
+                    <SiteBox c={c} />
+                  </div>
                   {c.technicianRemark && (
                     <p className="mt-1.5 text-sm">
                       <span className="text-muted-foreground">Technician: </span>{c.technicianRemark}
@@ -645,5 +644,38 @@ function ChallanForm({ staff, pending, onClose, onSave, initial, fromSurvey = nu
         )}
       </div>
     </Modal>
+  );
+}
+
+/**
+ * Where it is fitted, on the card (31 Oct 2026, Vcare): the site's name and a
+ * Map button when the pin is saved, or "No site yet" with a way to add one on
+ * the challan's page.
+ */
+function SiteBox({ c }: { c: Challan }) {
+  const name = c.siteName ?? c.siteLocation ?? null;
+  if (!name && !c.sitePin) {
+    return (
+      <div className="flex h-11 w-full items-center gap-2.5 rounded-lg bg-warning/10 px-3 sm:w-72">
+        <Icon name="map-pin" className="h-4 w-4 shrink-0 text-on-tint-warning" />
+        <span className="flex-1 text-xs font-medium text-on-tint-warning">No site yet</span>
+        <Link href={`/services/installations/${c.id}?site=change`} className="rounded-full bg-card px-2.5 py-1 text-xs font-semibold text-on-tint-brand hover:bg-brand/10">Add site</Link>
+      </div>
+    );
+  }
+  return (
+    <div className="flex h-11 w-full items-center gap-2.5 rounded-lg bg-muted px-3 sm:w-72">
+      <Icon name="map-pin" className="h-4 w-4 shrink-0 text-brand" />
+      <div className="min-w-0 flex-1 leading-tight">
+        <p className="truncate text-xs font-semibold" title={c.siteLocation ?? name ?? undefined}>{name ?? 'Pin only'}</p>
+        <p className="text-cap text-muted-foreground">{c.sitePin ? 'Pin saved' : 'Pin not saved yet'}</p>
+      </div>
+      {c.sitePin && (
+        <a href={`https://www.google.com/maps?q=${c.sitePin.lat},${c.sitePin.lng}`} target="_blank" rel="noreferrer noopener"
+          className="inline-flex shrink-0 items-center gap-1 rounded-full bg-brand/10 px-2.5 py-1 text-xs font-semibold text-on-tint-brand hover:bg-brand/15">
+          Map <Icon name="arrow-up-right" className="h-3 w-3" />
+        </a>
+      )}
+    </div>
   );
 }

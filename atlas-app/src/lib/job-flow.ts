@@ -163,7 +163,7 @@ export { WORKING as WORKING_STATUSES };
  */
 export const CUSTOMER_VISIBLE_KINDS = ['note', 'remark', 'pickup', 'status_change', 'visit_scheduled', 'visit_changed', 'visit_completed', 'estimate', 'customer_request'] as const;
 /** Never shown to a customer. Guard-tested. */
-export const INTERNAL_KINDS = ['assignment', 'challan_created', 'challan_changed', 'field_check_in', 'override', 'cost', 'internal_note', 'item_changed'] as const;
+export const INTERNAL_KINDS = ['assignment', 'challan_created', 'challan_changed', 'field_check_in', 'override', 'cost', 'internal_note', 'item_changed', 'site_changed'] as const;
 
 /** Old Vcare-style words each business may want instead (spec §3.2); applied as label overrides. */
 export type StatusLabels = Partial<Record<JobStatus, { office?: string; customer?: string }>>;

@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from 'react';
 import { addJobSiteAction, loadCustomerSitesAction } from '@/app/(app)/services/actions';
+import { Button } from '@/components/ui/Button';
+import { Modal } from '@/components/ui/Modal';
 
 type Site = Awaited<ReturnType<typeof loadCustomerSitesAction>>[number];
 /** What was chosen: a saved site, "another place" (typed words), or nothing yet. */
@@ -84,5 +86,20 @@ export function SitePicker({ id, customerId, value, onChange }: {
         </div>
       )}
     </div>
+  );
+}
+
+/** "Change site" on a job's page - an installation or a complaint (30-31 Oct 2026). */
+export function SiteDialog({ customerId, current, onClose, onSave }: {
+  customerId: string; current: { id: string | null; text: string | null }; onClose: () => void;
+  onSave: (v: { siteId: string | null; otherPlace: boolean; text: string | null }) => void;
+}) {
+  const [site, setSite] = useState<SiteChoice>(current.id ? { siteId: current.id, otherPlace: false, text: '' } : { siteId: null, otherPlace: true, text: current.text ?? '' });
+  const ok = !!site.siteId || (site.otherPlace && !!site.text.trim());
+  return (
+    <Modal title="Change site" subtitle="The technician's phone and the map follow this" icon="map-pin" size="sm" onClose={onClose}
+      footer={<><Button onClick={onClose}>Cancel</Button><Button variant="primary" disabled={!ok} onClick={() => onSave({ siteId: site.siteId, otherPlace: site.otherPlace, text: site.text.trim() || null })}>Save</Button></>}>
+      <SitePicker id="change-site" customerId={customerId} value={site} onChange={setSite} />
+    </Modal>
   );
 }

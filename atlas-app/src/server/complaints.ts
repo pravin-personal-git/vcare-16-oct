@@ -225,6 +225,8 @@ export interface ComplaintDetail extends ComplaintRow {
    */
   customerId: string;
   productId: string | null;
+  /** The customer's saved site it is at, when it has one (31 Oct 2026). */
+  siteId: string | null;
   customFields: Record<string, string>;
   activities: { id: string; kind: string; body: string | null; statusFrom: string | null; statusTo: string | null; visibleToPortal: boolean; createdById: string | null; createdByName: string | null; createdAt: Date }[];
   visits: {
@@ -290,6 +292,7 @@ export async function getComplaintDetail(scope: StoreScope, id: string): Promise
     billingStatus: c.billingStatus,
     customerId: c.customerId,
     productId: c.productId,
+    siteId: c.siteId,
     customerName: c.customer.companyName || [c.customer.firstName, c.customer.lastName].filter(Boolean).join(' '),
     customerPhone: c.customer.phone,
     siteLocation: c.siteLocation,
@@ -609,6 +612,32 @@ export async function setResolutionType(scope: StoreScope, complaintId: string, 
     await logActivity(tx, complaintId, 'note', userId, {
       body: resolutionType === 'field_visit' ? 'Decided: needs a field visit.' : 'Decided: direct replacement.',
     });
+  });
+}
+
+/**
+ * Change where a complaint is (31 Oct 2026, Vcare) - one raised without a site,
+ * or on the wrong one. Same rule as an installation's site (server/sites
+ * jobSite): the saved site's words and pin come with it. Logged on the job.
+ */
+export async function changeComplaintSite(
+  scope: StoreScope, complaintId: string, input: { siteId: string | null; otherPlace: boolean; text: string | null }, userId: string,
+) {
+  scopeForWrite(scope);
+  const c = await db.complaint.findFirst({ where: { id: complaintId, ...scopeWhere(scope) }, select: { id: true, storeId: true, customerId: true, siteLocation: true } });
+  if (!c) throw new ComplaintError('Complaint not found in your scope.');
+  const { jobSite, SiteError } = await import('./sites');
+  const place = await jobSite(c.storeId, c.customerId, input).catch((e) => { throw e instanceof SiteError ? new ComplaintError(e.message) : e; });
+  if (!place.siteId && !place.siteLocation) throw new ComplaintError('Type the address of the place.');
+  await db.$transaction(async (tx) => {
+    await tx.complaint.update({
+      where: { id: c.id },
+      data: {
+        siteId: place.siteId, siteLocation: place.siteLocation, siteLat: place.siteLat, siteLng: place.siteLng,
+        siteSource: place.siteLat !== null ? 'site' : null,
+      },
+    });
+    await logActivity(tx, c.id, 'site_changed', userId, { body: `Site changed: ${c.siteLocation ?? 'none'} → ${place.siteLocation}` });
   });
 }
 

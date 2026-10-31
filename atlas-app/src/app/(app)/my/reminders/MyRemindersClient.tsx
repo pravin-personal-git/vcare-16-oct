@@ -272,8 +272,10 @@ function WaitingList({ items, picked, setPicked, chosen, decide, busy, setReject
   setApproving: (item: InboxItem) => void;
 }) {
   const key = (i: InboxItem) => `${i.type}:${i.entityId}`;
-  // Items that need a note (a call-back) are approved one by one, never in bulk.
-  const needNote = chosen.filter((i) => i.noteToApprove);
+  // Items that need a note (a call-back) or a site's name are approved one by one, never in bulk.
+  const needNote = chosen.filter((i) => i.noteToApprove || i.nameSite);
+  // The name typed for each override that saves a new site (31 Oct 2026).
+  const [siteNames, setSiteNames] = useState<Record<string, string>>({});
 
   return (
         <>
@@ -281,9 +283,9 @@ function WaitingList({ items, picked, setPicked, chosen, decide, busy, setReject
             <div className="flex flex-wrap items-center gap-2 border-b border-border bg-muted/30 px-4 py-2 text-xs">
               <span className="font-medium">{chosen.length} selected</span>
               <Button size="sm" variant="primary" disabled={busy || needNote.length === chosen.length}
-                onClick={() => { chosen.filter((i) => !i.noteToApprove).forEach((i) => decide(i, 'approved', null)); setPicked(needNote.map(key)); }}>Approve all</Button>
+                onClick={() => { chosen.filter((i) => !i.noteToApprove && !i.nameSite).forEach((i) => decide(i, 'approved', null)); setPicked(needNote.map(key)); }}>Approve all</Button>
               <Button size="sm" disabled={busy} onClick={() => setRejecting(chosen)}>Reject all</Button>
-              {needNote.length > 0 && <span className="text-on-tint-warning">{needNote.length} need a note of your call - approve {needNote.length === 1 ? 'it' : 'them'} one by one.</span>}
+              {needNote.length > 0 && <span className="text-on-tint-warning">{needNote.length} need a note or a site name - approve {needNote.length === 1 ? 'it' : 'them'} one by one.</span>}
             </div>
           )}
           {/* One list in the chosen sort (30 Oct 2026: category blocks put the newest
@@ -320,10 +322,21 @@ function WaitingList({ items, picked, setPicked, chosen, decide, busy, setReject
                     {i.asOwner && <span className="text-muted-foreground"> · approving it yourself is recorded as an admin override</span>}
                   </p>
                 </div>
+                {i.nameSite && (
+                  <label className="flex w-full flex-col gap-1 sm:w-80">
+                    <span className="text-xs font-medium">Site name <span className="font-normal text-muted-foreground">- this job has no site</span></span>
+                    <input value={siteNames[key(i)] ?? ''} maxLength={120} placeholder="e.g. Raj Khare ghar, Padmanabhpur"
+                      onChange={(e) => setSiteNames((n) => ({ ...n, [key(i)]: e.target.value }))}
+                      className="h-8 w-full rounded-lg border border-border bg-background px-2.5 text-sm placeholder:text-muted-foreground focus:border-brand focus:outline-none" />
+                    <span className="text-cap text-muted-foreground">Saved for the customer at the technician&apos;s location.</span>
+                  </label>
+                )}
                 <div className="flex shrink-0 items-center gap-1.5">
                   <Link href={i.href} className="rounded-lg border border-border px-2.5 py-1 text-xs hover:bg-muted">Open</Link>
                   <Button size="sm" disabled={busy} onClick={() => setRejecting([i])}>Reject</Button>
-                  <Button size="sm" variant="primary" disabled={busy} onClick={() => (i.noteToApprove ? setApproving(i) : decide(i, 'approved', null))}>Approve</Button>
+                  <Button size="sm" variant="primary" disabled={busy || (i.nameSite && !siteNames[key(i)]?.trim())}
+                    title={i.nameSite && !siteNames[key(i)]?.trim() ? 'Type the site name first' : undefined}
+                    onClick={() => (i.nameSite ? decide(i, 'approved', siteNames[key(i)].trim()) : i.noteToApprove ? setApproving(i) : decide(i, 'approved', null))}>Approve</Button>
                 </div>
               </li>
               );

@@ -79,6 +79,8 @@ export interface InstallationChallanRow {
   /** Where it is fitted (G-21): the words, and the pin for a map link. */
   siteLocation: string | null;
   sitePin: { lat: number; lng: number } | null;
+  /** The customer's saved site it is fitted at, by name (31 Oct 2026) - the card's site box. */
+  siteName: string | null;
   /** Billed (G-30): the invoice it is on - money is then taken against the invoice, not here. */
   isInvoiced: boolean;
   invoice: { id: string; invoiceNo: string } | null;
@@ -109,6 +111,7 @@ export async function listInstallationChallans(
       invoiceSources: { where: { invoice: { lifecycle: { not: 'cancelled' } } }, take: 1, select: { invoice: { select: { id: true, invoiceNo: true } } } },
       items: { select: { qty: true } },
       assignees: { include: { user: { select: { fullName: true } } } },
+      site: { select: { name: true, latitude: true, longitude: true } },
     },
     orderBy: { dispatchedAt: 'desc' },
     take: LIST_MAX_ROWS,
@@ -127,7 +130,10 @@ export async function listInstallationChallans(
     siteLocation: r.siteLocation,
     isInvoiced: r.isInvoiced,
     invoice: r.invoiceSources[0]?.invoice ?? null,
-    sitePin: r.siteLat !== null && r.siteLng !== null ? { lat: Number(r.siteLat), lng: Number(r.siteLng) } : null,
+    // The challan's own pin, else its site's - a site pinned after the challan was raised still shows.
+    sitePin: r.siteLat !== null && r.siteLng !== null ? { lat: Number(r.siteLat), lng: Number(r.siteLng) }
+      : r.site?.latitude != null && r.site.longitude != null ? { lat: Number(r.site.latitude), lng: Number(r.site.longitude) } : null,
+    siteName: r.site?.name ?? null,
     rejectionReason: r.rejectionReason,
     salesOrderId: r.salesOrderId,
     orderNo: r.salesOrder?.orderNo ?? null,
@@ -161,6 +167,7 @@ export async function getInstallationChallanDetail(
       salesOrder: { select: { orderNo: true, customerName: true, partyId: true } },
       invoiceSources: { where: { invoice: { lifecycle: { not: 'cancelled' } } }, take: 1, select: { invoice: { select: { id: true, invoiceNo: true } } } },
       items: { orderBy: { srNo: 'asc' } },
+      site: { select: { name: true } },
       assignees: { include: { user: { select: { fullName: true } } } },
     },
   });
@@ -180,6 +187,7 @@ export async function getInstallationChallanDetail(
     isInvoiced: c.isInvoiced,
     invoice: c.invoiceSources[0]?.invoice ?? null,
     sitePin: c.siteLat !== null && c.siteLng !== null ? { lat: Number(c.siteLat), lng: Number(c.siteLng) } : null,
+    siteName: c.site?.name ?? null,
     rejectionReason: c.rejectionReason,
     salesOrderId: c.salesOrderId,
     orderNo: c.salesOrder?.orderNo ?? null,

@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useTransition } from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { Button } from '@/components/ui/Button';
 import { Icon, type IconName } from '@/components/ui/Icon';
 import { Badge } from '@/components/ui/Layout';
@@ -13,7 +13,7 @@ import type { AttachmentView } from '@/components/ui/Attachments';
 import { SearchSelect, type SearchOption } from '@/components/ui/SearchSelect';
 import { QuickVisitDialog } from '@/components/services/QuickVisitDialog';
 import { CustomerPicker } from '@/components/services/CustomerPicker';
-import { SitePicker, type SiteChoice } from '@/components/services/SitePicker';
+import { SiteDialog } from '@/components/services/SitePicker';
 import { ShelfUnits } from '@/components/services/GdnFix';
 import { docMessage } from '@/lib/wa-message';
 import { openWhatsApp } from '@/lib/wa-open';
@@ -69,7 +69,8 @@ export function InstallationView({ data: d, files, canEdit, canBill, parts }: {
   const [visit, setVisit] = useState(false);
   const [workDone, setWorkDone] = useState(false);
   const [billing, setBilling] = useState(false);
-  const [changingSite, setChangingSite] = useState(false);
+  // The list card's "Add site" opens this page with ?site=change (31 Oct 2026).
+  const [changingSite, setChangingSite] = useState(useSearchParams().get('site') === 'change' && canEdit && !d.closed);
   const [reasonFor, setReasonFor] = useState<null | { title: string; label: string; run: (r: string) => Promise<{ error?: string }> }>(null);
   const [tab, setTab] = useState<'remarks' | 'activity' | 'photos'>('remarks');
   const [team, setTeam] = useState<string[]>(d.team.map((t) => t.id));
@@ -573,16 +574,3 @@ function ReasonDialog({ title, label, onClose, onSave }: { title: string; label:
   );
 }
 
-/** Where it is fitted - one of the customer's sites, or another place (30 Oct 2026). */
-function SiteDialog({ customerId, current, onClose, onSave }: {
-  customerId: string; current: InstallationPage['site']; onClose: () => void; onSave: (v: { siteId: string | null; otherPlace: boolean; text: string | null }) => void;
-}) {
-  const [site, setSite] = useState<SiteChoice>(current.id ? { siteId: current.id, otherPlace: false, text: '' } : { siteId: null, otherPlace: true, text: current.text ?? '' });
-  const ok = !!site.siteId || (site.otherPlace && !!site.text.trim());
-  return (
-    <Modal title="Change site" subtitle="The technician's phone and the map follow this" icon="map-pin" size="sm" onClose={onClose}
-      footer={<><Button onClick={onClose}>Cancel</Button><Button variant="primary" disabled={!ok} onClick={() => onSave({ siteId: site.siteId, otherPlace: site.otherPlace, text: site.text.trim() || null })}>Save</Button></>}>
-      <SitePicker id="change-site" customerId={customerId} value={site} onChange={setSite} />
-    </Modal>
-  );
-}

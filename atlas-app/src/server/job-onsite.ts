@@ -196,7 +196,8 @@ export async function decideSiteOverride(
 
   // The place he asked from becomes the job's site (16 Oct 2026) - before
   // arriving, so the job has its location from then on. Never blocks the approval.
-  if (final === 'approved') await siteFromOverride(row, userId).catch((e) => console.error('[override-site]', e));
+  // The approval note names a new site when My Desk asked for one (31 Oct 2026).
+  if (final === 'approved') await siteFromOverride(row, userId, note).catch((e) => console.error('[override-site]', e));
 
   const job = await loadJob(scope, row.complaintId);
   if (!job) return;
@@ -214,15 +215,15 @@ export async function decideSiteOverride(
  * reused, a site with no location gets this one, otherwise a new site is made
  * (lib/override-site). What happened is written on the job.
  */
-async function siteFromOverride(
-  row: { complaintId: string; storeId: string; requestedBy: string; lat: unknown; lng: unknown; accuracyM: number | null; createdAt: Date },
-  userId: string,
-) {
+type OverrideRow = { complaintId: string; storeId: string; requestedBy: string; lat: unknown; lng: unknown; accuracyM: number | null; createdAt: Date };
+
+/** What approving this override would do to the job's site - lib/override-site's plan, from the database. */
+async function overrideSitePlan(row: OverrideRow) {
   const job = await db.complaint.findUnique({
     where: { id: row.complaintId },
     select: { id: true, storeId: true, customerId: true, siteLat: true, siteLng: true, site: { select: { id: true, latitude: true, longitude: true } } },
   });
-  if (!job) return;
+  if (!job) return null;
   const num = (v: unknown) => (v === null || v === undefined ? null : Number(v));
   const reading = num(row.lat) !== null && num(row.lng) !== null ? { lat: num(row.lat)!, lng: num(row.lng)!, accuracyM: row.accuracyM } : null;
   const sites = job.site ? [] : await db.partySite.findMany({
@@ -235,6 +236,29 @@ async function siteFromOverride(
     reading,
     customerSites: sites.map((s) => ({ id: s.id, lat: num(s.latitude), lng: num(s.longitude) })),
   });
+  return { job, reading, plan };
+}
+
+/**
+ * Pending overrides whose approval would save a NEW site - the job has no site
+ * and nothing saved is within 25 m. My Desk asks the approver to name these
+ * (31 Oct 2026, Vcare: "Site - 31 Oct (Tamraj yadav)" told nobody where it was).
+ */
+export async function overridesNeedingSiteName(storeIds: string[], ids: string[]): Promise<Set<string>> {
+  if (!ids.length) return new Set();
+  const rows = await db.siteOverride.findMany({
+    where: { id: { in: ids }, storeId: { in: storeIds }, status: 'pending' },
+    select: { id: true, complaintId: true, storeId: true, requestedBy: true, lat: true, lng: true, accuracyM: true, createdAt: true },
+  });
+  const out = new Set<string>();
+  for (const r of rows) if ((await overrideSitePlan(r))?.plan.kind === 'new_site') out.add(r.id);
+  return out;
+}
+
+async function siteFromOverride(row: OverrideRow, userId: string, siteName?: string | null) {
+  const found = await overrideSitePlan(row);
+  if (!found) return;
+  const { job, reading, plan } = found;
 
   if (plan.kind === 'none') {
     if (plan.reason === 'poor_accuracy') {
@@ -252,11 +276,12 @@ async function siteFromOverride(
       await tx.complaint.update({ where: { id: job.id }, data: { siteId: plan.siteId, siteLat: plan.lat, siteLng: plan.lng } });
       await logActivity(tx, job.id, 'override', userId, { body: `Linked to the saved site "${site?.name ?? 'site'}" (${plan.distanceM} m from where the technician asked) - no new site made.` });
     } else {
-      const who = await tx.user.findUnique({ where: { id: row.requestedBy }, select: { fullName: true } });
-      const name = newSiteName(row.createdAt, who?.fullName ?? null);
+      // The approver's name for the place (My Desk asks for it); the dated stand-in when approved elsewhere.
+      const who = siteName?.trim() ? null : await tx.user.findUnique({ where: { id: row.requestedBy }, select: { fullName: true } });
+      const name = siteName?.trim().slice(0, 120) || newSiteName(row.createdAt, who?.fullName ?? null);
       const site = await tx.partySite.create({ data: { storeId: job.storeId, partyId: job.customerId, name, latitude: reading!.lat, longitude: reading!.lng } });
       await tx.complaint.update({ where: { id: job.id }, data: { siteId: site.id, siteLat: reading!.lat, siteLng: reading!.lng } });
-      await logActivity(tx, job.id, 'override', userId, { body: `New site "${name}" saved from where the technician asked. Rename it on the customer if needed.` });
+      await logActivity(tx, job.id, 'override', userId, { body: `New site "${name}" saved from where the technician asked.${siteName?.trim() ? '' : ' Rename it on the customer if needed.'}` });
     }
   });
 }
