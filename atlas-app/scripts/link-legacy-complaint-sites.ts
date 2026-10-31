@@ -33,6 +33,9 @@ type Old = { complaint_id: string; map_link?: { siteName?: string } };
 
 async function main() {
   if (!apply) await db.$executeRawUnsafe('SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY');
+  // A complaint someone is saving right now is skipped and listed, never waited on (31 Oct 2026: a stuck
+  // batch transaction held a row through the pooler and every later run timed out behind it).
+  else await db.$executeRawUnsafe("SET lock_timeout = '5s'");
   const old = JSON.parse(readFileSync(snapshot, 'utf8')) as Old[];
   const oldSite = new Map(old.map((o) => [o.complaint_id, (o.map_link?.siteName ?? '').trim()]));
 
@@ -48,7 +51,7 @@ async function main() {
   for (const s of sites) (byParty.get(s.partyId) ?? byParty.set(s.partyId, []).get(s.partyId)!).push(s);
 
   const rows: string[] = ['complaint,old_site,result,linked_site'];
-  const tally = { linked: 0, noOldSite: 0, noMatch: 0, several: 0 };
+  const tally = { linked: 0, noOldSite: 0, noMatch: 0, several: 0, busy: 0 };
   for (const c of complaints) {
     const name = oldSite.get(c.legacyRef!) ?? '';
     if (!name) { tally.noOldSite++; continue; }
@@ -59,12 +62,11 @@ async function main() {
       continue;
     }
     const s = hits[0];
-    tally.linked++;
-    rows.push(`${c.complaintNo},"${name.replace(/"/g, '""')}",linked,"${s.name.replace(/"/g, '""')}"`);
-    if (!apply) continue;
+    if (!apply) { tally.linked++; rows.push(`${c.complaintNo},"${name.replace(/"/g, '""')}",linked,"${s.name.replace(/"/g, '""')}"`); continue; }
     const pinned = c.siteLat === null && s.latitude !== null && s.longitude !== null;
-    await db.$transaction([
-      db.complaint.update({
+    try {
+      // One statement each, no transaction: the link is the change, the activity line only records it.
+      await db.complaint.update({
         where: { id: c.id },
         data: {
           siteId: s.id,
@@ -72,11 +74,17 @@ async function main() {
           ...(c.siteLocation ? {} : { siteLocation: [s.name, s.address].filter(Boolean).join(' - ') }),
           ...(pinned ? { siteLat: s.latitude, siteLng: s.longitude, siteSource: 'site' } : {}),
         },
-      }),
-      db.complaintActivity.create({
-        data: { complaintId: c.id, kind: 'site_changed', createdBy: null, visibleToPortal: false, body: `Site linked from the old system: ${s.name}` },
-      }),
-    ]);
+      });
+    } catch (e) {
+      tally.busy++;
+      rows.push(`${c.complaintNo},"${name.replace(/"/g, '""')}",skipped - busy or failed,"${String(e).slice(0, 80).replace(/"/g, "'")}"`);
+      continue;
+    }
+    await db.complaintActivity.create({
+      data: { complaintId: c.id, kind: 'site_changed', createdBy: null, visibleToPortal: false, body: `Site linked from the old system: ${s.name}` },
+    }).catch(() => undefined);
+    tally.linked++;
+    rows.push(`${c.complaintNo},"${name.replace(/"/g, '""')}",linked,"${s.name.replace(/"/g, '""')}"`);
   }
   if (outCsv) writeFileSync(outCsv, rows.join('\n') + '\n');
   console.log(apply ? 'APPLIED' : 'DRY RUN (nothing written)', tally, outCsv ? `list: ${outCsv}` : '');
