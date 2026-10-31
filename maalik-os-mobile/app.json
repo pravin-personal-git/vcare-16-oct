@@ -2,7 +2,7 @@
   "expo": {
     "name": "Vcare",
     "slug": "ns-vcare-app",
-    "version": "1.0.35",
+    "version": "1.0.36",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
@@ -18,7 +18,7 @@
       },
       "predictiveBackGestureEnabled": false,
       "package": "com.nairsolutions.maalikos",
-      "versionCode": 37,
+      "versionCode": 38,
       "permissions": [
         "android.permission.READ_CALL_LOG",
         "android.permission.POST_NOTIFICATIONS"

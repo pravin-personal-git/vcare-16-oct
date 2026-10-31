@@ -18,7 +18,11 @@ type Send = (key: string, body: Record<string, unknown>, done?: string) => Promi
 const today = () => new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
 const hms = (sec: number) => (sec >= 3600 ? `${Math.floor(sec / 3600)}h ${Math.floor((sec % 3600) / 60)}m` : `${Math.max(1, Math.round(sec / 60))} min`);
 
-export function JobNextStep({ status, state, busy, send }: { status: string; state: JobState; busy: string | null; send: Send }) {
+export function JobNextStep({ status, state, busy, send, noOverride = false }: {
+  status: string; state: JobState; busy: string | null; send: Send;
+  /** No manager override for this kind of job (installations, 31 Oct 2026). */
+  noOverride?: boolean;
+}) {
   const { t } = useT();
   const { c } = useTheme();
   const actions = state.actions ?? [];
@@ -76,7 +80,7 @@ export function JobNextStep({ status, state, busy, send }: { status: string; sta
           {has('decline') && <Button variant="secondary" icon="x" label={t('Decline')} onPress={() => setAsk('decline')} />}
           {has('on_the_way') && <Button variant="secondary" icon="navigation" label={t('On my way')} loading={busy === 'on_the_way'} onPress={() => void send('on_the_way', { op: 'on_the_way' }, 'The customer can see you are on the way.')} />}
           {has('on_site') && !state.overridePending && <Button icon="mapPin" label={t('Working on site')} loading={busy === 'on_site'} onPress={() => void onSite()} />}
-          {has('on_site') && blocked && blocked.reason !== 'mocked' && !state.overridePending && (
+          {has('on_site') && blocked && blocked.reason !== 'mocked' && !state.overridePending && !noOverride && (
             <Button variant="secondary" icon="alert" label={t('Ask manager for an override')} onPress={() => setAsk('override')} />
           )}
           {has('work_done') && <Button icon="check" label={t('Work done')} onPress={() => setAsk('work_done')} />}

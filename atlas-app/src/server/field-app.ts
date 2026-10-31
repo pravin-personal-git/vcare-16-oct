@@ -59,7 +59,10 @@ export async function technicianInstallations(
     where: {
       ...scopeWhere(scope),
       // Rejected work is somebody else's problem until it comes back.
-      status: { notIn: ['rejected'] },
+      status: { notIn: ['rejected', 'approved'] },
+      // Done is done (31 Oct 2026): billed, closed and waiting-to-close jobs are not shown to technicians.
+      isInvoiced: false, notBilledReason: null,
+      stage: { notIn: ['resolved', 'closed', 'cancelled', 'billed', 'work_done'] },
       ...(opts.all ? {} : { assignees: { some: { userId } } }),
     },
     orderBy: { dispatchedAt: 'desc' },
@@ -109,6 +112,7 @@ export async function technicianInstallation(scope: StoreScope, challanId: strin
     select: {
       id: true, challanNo: true, status: true, stage: true, priority: true, dispatchedAt: true,
       technicianRemark: true, note: true, physicalChallanNo: true, isInvoiced: true, siteLocation: true,
+      siteLat: true, siteLng: true,
       customer: { select: { firstName: true, lastName: true, companyName: true, phone: true, phoneCc: true, addressLine1: true } },
       salesOrder: {
         select: {
@@ -155,6 +159,8 @@ export async function technicianInstallation(scope: StoreScope, challanId: strin
     phone: c.customer?.phone ? [c.customer.phoneCc, c.customer.phone].filter(Boolean).join(' ') : c.salesOrder?.phone ?? null,
     siteAddress: c.siteLocation ?? c.salesOrder?.shippingAddress ?? c.salesOrder?.billingAddress ?? c.customer?.addressLine1 ?? null,
     team: c.assignees.map((a) => a.user.fullName),
+    // The site pin, for Navigate (phone 1.0.36).
+    siteLat: c.siteLat === null ? null : Number(c.siteLat), siteLng: c.siteLng === null ? null : Number(c.siteLng),
     items: c.items.map((i) => ({
       id: i.id,
       productId: i.productId,

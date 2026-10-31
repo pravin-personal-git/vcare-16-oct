@@ -2,7 +2,7 @@ import { field, jsonBody, str, V1Error } from '@/server/auth/v1-staff';
 import { db } from '@/server/db';
 import { scanUnitOntoChallan, technicianInstallation } from '@/server/field-app';
 import {
-  installationCustomerApproved, installationTechActions, markInstallationWorkDone, moveInstallation, resendInstallationOtp, setInstallationStage,
+  addInstallationNote, installationActivities, installationCustomerApproved, installationOnSite, installationTechActions, markInstallationWorkDone, moveInstallation, resendInstallationOtp, setInstallationStage,
   updateInstallationItems, verifyInstallationOtp,
 } from '@/server/installation-page';
 import { requestInstallationReturn } from '@/server/installation-returns';
@@ -48,6 +48,8 @@ export async function GET(req: Request, { params }: Params) {
       working: isInstallWorking(c.stage),
       // A complaint's steps (30 Oct 2026): accept | decline | on_the_way | leave_site | enter_otp | resend_otp | customer_approved.
       actions: canEdit ? installationTechActions(c.stage, onTeam) : [],
+      // The job's history, as a complaint's (phone 1.0.36). Older builds ignore it.
+      activities: await installationActivities(id),
       parts: canEdit && partsOn(access) && store ? await phoneInstallationParts(ctx.scope, id, store.storeId, ctx.user.id) : null,
     };
   });
@@ -83,6 +85,24 @@ export async function POST(req: Request, { params }: Params) {
       // two screens.
       // Optional "received by" from builds 1.0.33 on (27 Oct 2026): who took it over on site.
       await markInstallationWorkDone(ctx.scope, id, ctx.user.id, str(b.receivedBy, 120) || null);
+      return { ok: true };
+    }
+
+    // Working on site, Work done with what was done, and remarks - as on a complaint (31 Oct 2026, phone 1.0.36).
+    if (action === 'on_site') {
+      const lat = Number(b.lat), lng = Number(b.lng), acc = Number(b.accuracyM);
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) throw new V1Error('Your location could not be read. Turn on location and try again.');
+      const onSite = await installationOnSite(ctx.scope, id, { lat, lng, accuracyM: Number.isFinite(acc) ? acc : null, mocked: b.mocked === true }, ctx.user.id);
+      return { ok: onSite.ok, onSite };
+    }
+    if (action === 'work_done') {
+      const note = str(b.note, 2000);
+      if (note) await addInstallationNote(ctx.scope, id, note, ctx.user.id);
+      await markInstallationWorkDone(ctx.scope, id, ctx.user.id, str(b.receivedBy, 120) || null);
+      return { ok: true };
+    }
+    if (action === 'note') {
+      await addInstallationNote(ctx.scope, id, str(b.body, 2000) ?? '', ctx.user.id);
       return { ok: true };
     }
 

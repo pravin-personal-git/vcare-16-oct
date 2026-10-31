@@ -51,8 +51,8 @@ export default function EmployeeHome() {
   }, []);
 
   const has = (...keys: string[]) => !!perms && keys.some((k) => perms.has(k));
-  const tiles: { icon: IconName; label: string; line: string; href: '/employee/complaints' | '/employee/stock' | '/employee/leads' | '/employee/tasks' | '/employee/requests' | '/employee/approvals' | '/reminders' }[] = [
-    ...(access.sections.complaints && has('complaints.view', 'complaints.edit') ? [{ icon: 'wrench' as const, label: t('Jobs'), line: t('Jobs and site visits'), href: '/employee/complaints' as const }] : []),
+  const tiles: { icon: IconName; label: string; line: string; href: '/employee/myjobs' | '/employee/stock' | '/employee/leads' | '/employee/tasks' | '/employee/requests' | '/employee/approvals' | '/reminders' }[] = [
+    ...(access.sections.complaints && has('complaints.view', 'complaints.edit') ? [{ icon: 'wrench' as const, label: t('My jobs'), line: t('Complaints and installations'), href: '/employee/myjobs' as const }] : []),
     ...(access.sections.stock && has('stock.view', 'purchase.view', 'purchase.edit') ? [{ icon: 'box' as const, label: t('Stock'), line: t('Scan, look up, receive'), href: '/employee/stock' as const }] : []),
     ...(access.sections.leads && has('leads.view', 'leads.edit', 'leads.create') ? [{ icon: 'trending' as const, label: t('Leads'), line: t('Follow-ups and new leads'), href: '/employee/leads' as const }] : []),
     // Everyone can be given a task, so everyone gets the tile - unless the owner switched it off.

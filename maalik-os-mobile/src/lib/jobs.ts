@@ -283,6 +283,8 @@ export interface InstallationDetail {
   stages?: { key: string; label: string }[]; priority?: string;
   /** The order's goods have left on its GDN - only then can unused ones come back (22 Oct 2026). */
   dispatched?: boolean;
+  /** The site pin, for Navigate (servers from 31 Oct 2026). */
+  siteLat?: number | null; siteLng?: number | null;
 }
 
 export const myInstallations = (all = false) =>
@@ -295,7 +297,13 @@ export const myInstallations = (all = false) =>
  * this person may send goods back and ask for material. Absent from an older server.
  */
 export const installation = (id: string) =>
-  authed<{ installation: InstallationDetail; canEdit: boolean; onTeam?: boolean; working?: boolean; parts?: JobParts | null; actions?: JobAction[] }>(`/api/v1/jobs/installations/${id}`);
+  authed<{ installation: InstallationDetail; canEdit: boolean; onTeam?: boolean; working?: boolean; parts?: JobParts | null; actions?: JobAction[];
+    /** The job's history, newest first (servers from 31 Oct 2026). */
+    activities?: ComplaintDetail['activities'] }>(`/api/v1/jobs/installations/${id}`);
+
+/** A job step on an installation (accept ... work done, a remark) - Working on site answers with the location check. */
+export const installationStep = (id: string, body: Record<string, unknown>) =>
+  send<{ ok: boolean; onSite?: OnSiteResult }>(`/api/v1/jobs/installations/${id}`, { ...body, action: body.op }, { label: String(body.op ?? 'Step'), target: `installation:${id}` });
 
 /** N of an item are unused and coming back - a request; the store receives them (22 Oct 2026). */
 export const returnInstallationItem = (id: string, challanItemId: string, qty: number) =>

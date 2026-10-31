@@ -36,10 +36,9 @@ export function TopTabs({ current }: { current: string }) {
   const path = usePathname();
 
   const tabs: Tab[] = [
+    // Three tabs (31 Oct 2026): complaints, installations and visits are one list, My jobs.
     { key: 'home', label: t('Home'), href: '/employee/home' },
-    ...(a.sections.installations ? [{ key: 'installs', label: t('Installs'), href: '/employee/installations' }] : []),
-    ...(a.sections.complaints ? [{ key: 'jobs', label: t('Complaints'), href: '/employee/complaints' }] : []),
-    ...(a.sections.complaints ? [{ key: 'visits', label: t('Visits'), href: '/employee/visits' }] : []),
+    ...(a.sections.complaints || a.sections.installations ? [{ key: 'myjobs', label: t('My jobs'), href: '/employee/myjobs' }] : []),
     ...(a.sections.van ? [{ key: 'van', label: t('My van'), href: '/employee/van' }] : []),
   ];
 

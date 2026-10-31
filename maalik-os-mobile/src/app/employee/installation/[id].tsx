@@ -4,16 +4,16 @@ import { useLocalSearchParams } from 'expo-router';
 import { useT } from '@/i18n/I18nProvider';
 import { useTheme } from '@/theme/ThemeProvider';
 import { Banner, Button, Card, Field, Text } from '@/components/ui';
-import { Empty, Loading, Pill, SectionLabel, Segmented, SubScreen, fmtDate, useLoad } from '@/components/Kit';
+import { Empty, Loading, Pill, SectionLabel, Segmented, SubScreen, fmtDate, fmtDateTime, useLoad } from '@/components/Kit';
 import { Scanner } from '@/components/Scanner';
 import { Icon } from '@/components/Icon';
-import { JobMedia } from '@/components/JobMedia';
+import { JobMedia, JobStepper } from '@/components/JobMedia';
 import { JobPartsCard } from '@/components/JobPartsCard';
 import { JobNextStep } from '@/components/JobNextStep';
 import { Waiting } from '@/components/OfflineBar';
 import { isQueued } from '@/lib/outbox';
 import {
-  installation, installationPartsAction, installationWorkDone, returnInstallationItem, scanOntoInstallation,
+  installation, installationPartsAction, installationStep, returnInstallationItem, scanOntoInstallation,
   STATUS_LABEL, statusTone, updateInstallationItem, type InstallationItem,
 } from '@/lib/jobs';
 import { dialable, useAccess } from '@/lib/access';
@@ -36,6 +36,10 @@ import { space } from '@/theme/tokens';
  * coming back, and the store adds them to stock when it receives them. The
  * Parts card below asks for what is not on the order (cable, clamps) on a
  * material challan, and sends unused material back the same way.
+ *
+ * LAID OUT LIKE A COMPLAINT (31 Oct 2026, phone 1.0.36): status, Call and
+ * Navigate, then the next step (Accept ... Working on site ... Work done with
+ * what was done ... the customer's code), the items, remarks and history.
  */
 export default function Installation() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -72,19 +76,6 @@ export default function Installation() {
       // Shown, not swallowed. The commonest cause is scanning the box next to
       // the one being fitted, and a technician can only fix that if told.
       setProblem(e instanceof Error ? e.message : t('That could not be scanned.'));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const finish = async () => {
-    setProblem(null);
-    setBusy(true);
-    try {
-      queuedOrDone(await installationWorkDone(String(id), receivedBy.trim() || null));
-      await reload();
-    } catch (e) {
-      setProblem(e instanceof Error ? e.message : t('Could not mark it done.'));
     } finally {
       setBusy(false);
     }
@@ -134,15 +125,17 @@ export default function Installation() {
     }
   };
 
-  /** A complaint's step on the installation (30 Oct 2026) - Accept, On my way, the customer's code. */
+  /** A complaint's step on the installation (30 Oct 2026) - Accept ... Working on site, Work done, the customer's code. */
   const [stepBusy, setStepBusy] = useState<string | null>(null);
   const stepAct = async (key: string, body: Record<string, unknown>, done?: string) => {
     setStepBusy(key); setProblem(null); setNotice(null);
     try {
-      const r = await installationPartsAction(String(id), body);
+      // Work done carries who took it over on site, when given.
+      const r = await installationStep(String(id), body.op === 'work_done' ? { ...body, receivedBy: receivedBy.trim() || null } : body);
+      if (r && !isQueued(r) && r.onSite && !r.onSite.ok) return r;
       setNotice(isQueued(r) ? t(r.message) : done ? t(done) : null);
       await reload();
-      return {};
+      return r && !isQueued(r) ? r : {};
     } catch (e) {
       setProblem(e instanceof Error ? t(e.message) : t('Could not reach the server. Check the connection and try again.'));
       return null;
@@ -150,6 +143,14 @@ export default function Installation() {
       setStepBusy(null);
     }
   };
+
+  const [note, setNote] = useState('');
+  const addNote = async () => {
+    if (await stepAct('note', { op: 'note', body: note }, 'Remark saved - the office sees it on the job.')) setNote('');
+  };
+  // A long challan (193 pieces) needs finding: search and a To scan / Not fitted filter.
+  const [itemQ, setItemQ] = useState('');
+  const [itemF, setItemF] = useState<'all' | 'scan' | 'unfit'>('all');
 
   if (loading && !j) return <SubScreen title={t('Installation')}><Loading /></SubScreen>;
   if (!j) {
@@ -167,67 +168,50 @@ export default function Installation() {
   const mayReturn = canEdit && data?.onTeam === true && j.dispatched === true && !j.isInvoiced;
   const phone = dialable(access.hide.customerPhone ? null : j.phone, j.phone);
 
+  const simple = access.layout.preset === 'simple';
+  const itemNeedle = itemQ.trim().toLowerCase();
+  const shownItems = j.items.filter((i) => (!itemNeedle || `${i.productName} ${i.productCode ?? ''} ${i.serialNo ?? ''}`.toLowerCase().includes(itemNeedle))
+    && (itemF === 'all' || (itemF === 'scan' ? i.scannable && !i.scanned : i.fitStatus === 'to_fit')));
+
   return (
-    <SubScreen
-      title={j.challanNo}
-      subtitle={j.customerName}
-      onRefresh={reload}
-      footer={canEdit && (j.status === 'pending' || j.status === 'rejected') && j.stage !== 'received' && j.stage !== 'assigned' && j.stage !== 'cancelled' ? (
-        <Button
-          label={left > 0 ? `${t('Mark work done')} (${left} ${t('not scanned')})` : t('Mark work done')}
-          onPress={finish}
-          loading={busy}
-        />
-      ) : undefined}
-    >
-      {problem && <Banner tone="danger">{problem}</Banner>}
-      {notice && <Banner tone="warning">{notice}</Banner>}
+    <SubScreen title={j.customerName} subtitle={j.challanNo} onRefresh={reload}>
       <Waiting target={`installation:${id}`} />
 
-      {/* ---- the site ------------------------------------------------- */}
-      <Card>
-        <Text weight="bold">{j.customerName}</Text>
-        {j.siteAddress && <Text variant="small" color={c.inkSoft}>{j.siteAddress}</Text>}
-        <View style={{ flexDirection: 'row', gap: space.md, marginTop: space.sm }}>
-          {j.siteAddress && (
-            <Pressable
-              accessibilityRole="button"
-              onPress={() => Linking.openURL(
-                `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(j.siteAddress ?? '')}`)}
-              style={{ flexDirection: 'row', alignItems: 'center', gap: space.xs }}
-            >
-              <Icon name="mapPin" size={16} color={c.brand} />
-              <Text variant="small" weight="semibold" color={c.brand}>{t('Navigate')}</Text>
-            </Pressable>
-          )}
-          {phone && (
-            <Pressable
-              accessibilityRole="button"
-              onPress={() => Linking.openURL(`tel:${phone}`)}
-              style={{ flexDirection: 'row', alignItems: 'center', gap: space.xs }}
-            >
-              <Icon name="phone" size={16} color={c.brand} />
-              <Text variant="small" weight="semibold" color={c.brand}>{t('Call site')}</Text>
-            </Pressable>
-          )}
+      {/* ---- as a complaint: status, what, where, Call and Navigate ---- */}
+      <Card style={{ gap: space.md }}>
+        <View style={{ flexDirection: 'row', gap: space.sm, flexWrap: 'wrap' }}>
+          {j.stage && <Pill label={t(STATUS_LABEL[j.stage] ?? j.stageLabel ?? j.stage)} tone={STATUS_LABEL[j.stage] ? statusTone(j.stage) : 'brand'} />}
+          <Pill label={t('Installation')} tone="neutral" />
+          {left > 0 && <Pill label={`${left} ${t('to scan')}`} tone="warning" />}
         </View>
-        <Text variant="micro" color={c.muted} style={{ marginTop: space.sm }}>
+        <Text>{`${j.items.reduce((n, i) => n + i.qty, 0)} ${t('items to fit')}${j.note ? ` - ${j.note}` : ''}`}</Text>
+        {j.siteAddress ? <Text variant="small" color={c.inkSoft}>{j.siteAddress}</Text> : null}
+        <View style={{ flexDirection: 'row', gap: space.sm }}>
+          {phone ? <Button style={{ flex: 1 }} variant="secondary" icon="phone" label={t('Call')} onPress={() => void Linking.openURL(`tel:${phone}`)} /> : null}
+          {(j.siteLat != null && j.siteLng != null) || j.siteAddress ? (
+            <Button
+              style={{ flex: 1 }} variant="secondary" icon="navigation" label={t('Navigate')}
+              onPress={() => void Linking.openURL(j.siteLat != null && j.siteLng != null
+                ? `https://www.google.com/maps/dir/?api=1&destination=${j.siteLat},${j.siteLng}`
+                : `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(j.siteAddress ?? '')}`)}
+            />
+          ) : null}
+        </View>
+        <Text variant="micro" color={c.muted}>
           {[j.orderNo, fmtDate(j.dispatchedAt), j.team.join(', ')].filter(Boolean).join(' · ')}
         </Text>
+        {simple && j.stage && <JobStepper status={j.stage} />}
       </Card>
 
-      {/* ---- the stage (servers from 11 Oct 2026) ---------------------- */}
-      {j.stageLabel && (
-        <Card>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: space.sm, flexWrap: 'wrap' }}>
-            <Text variant="small" color={c.inkSoft}>{t('Status')}</Text>
-            {/* A complaint's words and colours (servers from 30 Oct 2026); an older server's stage as it was. */}
-            <Pill label={t(STATUS_LABEL[j.stage ?? ''] ?? j.stageLabel)} tone={STATUS_LABEL[j.stage ?? ''] ? statusTone(j.stage ?? '') : j.stage === 'billed' || j.stage === 'work_done' ? 'success' : 'brand'} />
-          </View>
-        </Card>
+      {problem && <Banner tone="danger">{problem}</Banner>}
+      {notice && <Banner tone="warning">{notice}</Banner>}
+
+      {/* Who takes it over - sent with Work done. */}
+      {canEdit && data?.onTeam && j.stage === 'on_site' && (
+        <Field label={t('Received by (optional)')} value={receivedBy} onChangeText={setReceivedBy} placeholder={t("The customer's name")} />
       )}
       {canEdit && j.stage && (
-        <JobNextStep status={j.stage} state={{ actions: data?.actions ?? [] }} busy={stepBusy} send={stepAct} />
+        <JobNextStep status={j.stage} state={{ actions: data?.actions ?? [] }} busy={stepBusy} send={stepAct} noOverride />
       )}
 
       {/* Site photo and voice note (13 Oct 2026) - the simple layout's switches apply. */}
@@ -238,8 +222,18 @@ export default function Installation() {
       )}
 
       {/* ---- what goes in --------------------------------------------- */}
-      <SectionLabel>{t('To fit today')}</SectionLabel>
-      {j.items.map((i) => (
+      <SectionLabel>{t('To fit')}</SectionLabel>
+      {j.items.length > 6 && (
+        <>
+          <Field label={t('Find an item')} icon="search" value={itemQ} onChangeText={setItemQ} autoCorrect={false} />
+          <Segmented value={itemF} onChange={setItemF} options={[
+            { key: 'all', label: `${t('All')} ${j.items.length}` },
+            { key: 'scan', label: `${t('To scan')} ${left}` },
+            { key: 'unfit', label: `${t('Not fitted')} ${j.items.filter((i) => i.fitStatus === 'to_fit').length}` },
+          ]} />
+        </>
+      )}
+      {shownItems.map((i) => (
         <Card key={i.id}>
           <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: space.md }}>
             <View style={{ flex: 1 }}>
@@ -343,24 +337,30 @@ export default function Installation() {
         <Empty icon="box" title={t('Nothing on this challan')} line={t('The office has not added any lines yet.')} />
       )}
 
-      {/*
-        Said plainly rather than blocking the button. A fitting where one camera
-        was swapped for a spare off the shelf is normal, and refusing to close
-        the job would mean the technician leaves it open and the office chases
-        it tomorrow.
-      */}
-      {canEdit && (j.status === 'pending' || j.status === 'rejected') && (
-        <Card>
-          <Field label={t('Received by (optional)')} value={receivedBy} onChangeText={setReceivedBy} placeholder={t("The customer's name")} />
-          <Text variant="micro" color={c.muted} style={{ marginTop: space.xs }}>{t('Work done marks every item fitted and starts the warranty today.')}</Text>
-        </Card>
-      )}
-
-      {left > 0 && (
+      {left > 0 && j.stage === 'on_site' && (
         <Banner tone="warning">
           {left} {t('item(s) still have no number scanned against them. You can still finish, but the office will not know which ones went in.')}
         </Banner>
       )}
+
+      {/* ---- remarks and history, as on a complaint (31 Oct 2026) ------- */}
+      {canEdit && data?.onTeam && (
+        <>
+          <SectionLabel>{t('Update')}</SectionLabel>
+          <Field label={t('What was done')} value={note} onChangeText={setNote} multiline placeholder={t('Fitted 4 cameras, wiring left on the first floor...')} />
+          <Button variant="secondary" icon="note" label={t('Add note')} loading={stepBusy === 'note'} disabled={!note.trim()} onPress={() => void addNote()} />
+        </>
+      )}
+      {(data?.activities?.length ?? 0) > 0 && <SectionLabel>{t('History')}</SectionLabel>}
+      {(data?.activities ?? []).slice(0, 20).map((a) => (
+        <View key={a.id} style={{ flexDirection: 'row', gap: space.md }}>
+          <View style={{ width: 8, height: 8, borderRadius: 4, marginTop: 8, backgroundColor: c.brand }} />
+          <View style={{ flex: 1 }}>
+            <Text variant="small">{a.body ?? a.kind}</Text>
+            <Text variant="micro" color={c.muted}>{fmtDateTime(a.createdAt)}{a.createdByName ? ` · ${a.createdByName}` : ''}</Text>
+          </View>
+        </View>
+      ))}
 
       {scanning && (
         <Scanner

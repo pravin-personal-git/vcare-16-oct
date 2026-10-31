@@ -187,8 +187,76 @@ export function installationTechActions(stage: string, onTeam: boolean): string[
   if (s === 'awaiting_customer') return ['enter_otp', 'resend_otp', 'customer_approved'];
   const out: string[] = [];
   if (findTransition(s, 'on_the_way', 'technician')) out.push('on_the_way');
+  // Working on site and Work done, as on a complaint (31 Oct 2026, phone 1.0.36).
+  if (findTransition(s, 'on_site', 'technician')) out.push('on_site');
+  if (findTransition(s, 'awaiting_customer', 'technician')) out.push('work_done');
   if (s === 'on_site') out.push('leave_site');
   return out;
+}
+
+export type InstallOnSiteResult =
+  | { ok: true; distanceM: number | null }
+  | { ok: false; reason: string; distanceM: number | null; message: string; radiusM: number };
+
+/**
+ * Working on site (31 Oct 2026). The complaint's location check where the
+ * installation has a pinned site; with no pin it is let through and logged -
+ * many installations still have only an address, and there is no override
+ * flow for installations yet.
+ */
+export async function installationOnSite(
+  scope: StoreScope, id: string, reading: { lat: number; lng: number; accuracyM: number | null; mocked: boolean }, userId: string,
+): Promise<InstallOnSiteResult> {
+  const c = await own(scope, id);
+  await mustBeOnTeam(id, userId);
+  const pin = await db.installationChallan.findUnique({ where: { id }, select: { siteLat: true, siteLng: true } });
+  const { getJobSettings } = await import('./job-settings');
+  const { metresBetween } = await import('@/lib/shift');
+  const { siteGate } = await import('@/lib/job-flow');
+  const settings = await getJobSettings(c.storeId);
+  const distanceM = pin?.siteLat != null && pin.siteLng != null
+    ? Math.round(metresBetween({ lat: reading.lat, lng: reading.lng }, { lat: Number(pin.siteLat), lng: Number(pin.siteLng) }))
+    : null;
+  const gate = siteGate({ gateOn: settings.locationGate && distanceM !== null, radiusM: settings.radiusMeters, distanceM, accuracyM: reading.accuracyM, mocked: reading.mocked });
+  if (!gate.ok) {
+    const message = gate.reason === 'too_far'
+      ? `You are ${distanceM} m from the site (allowed ${settings.radiusMeters} m). Go to the site. If the pin is wrong, ask the office to fix the site.`
+      : gate.reason === 'poor_accuracy'
+        ? `Your location is only accurate to ${Math.round(reading.accuracyM ?? 0)} m. Step outside or wait a moment and try again.`
+        : gate.message;
+    return { ok: false, reason: gate.reason, distanceM, radiusM: settings.radiusMeters, message };
+  }
+  await moveInstallation(scope, id, 'on_site', 'technician', userId);
+  await log(c.storeId, id, userId, 'Check-in', distanceM !== null
+    ? `Arrived on site - ${distanceM} m from the site pin${reading.accuracyM ? ` (GPS ±${Math.round(reading.accuracyM)} m)` : ''}.`
+    : `Arrived on site - no site pin to check against (at ${reading.lat.toFixed(5)}, ${reading.lng.toFixed(5)}).`);
+  return { ok: true, distanceM };
+}
+
+/** A technician's remark (31 Oct 2026): logged on the job and kept as the latest technician remark. */
+export async function addInstallationNote(scope: StoreScope, id: string, body: string, userId: string): Promise<void> {
+  const text = body.trim().slice(0, 2000);
+  if (!text) throw new InstallationChallanError('Write the remark first.');
+  const c = await own(scope, id);
+  await db.installationChallan.update({ where: { id }, data: { technicianRemark: text } });
+  await log(c.storeId, id, userId, 'Note', text);
+}
+
+/** The job's history for the phone, newest first. */
+export async function installationActivities(id: string) {
+  const rows = await db.activityLog.findMany({
+    where: { entityType: ENTITY, entityId: id },
+    orderBy: { createdAt: 'desc' },
+    take: 30,
+    select: { id: true, activityType: true, description: true, statusTo: true, createdAt: true, userId: true },
+  });
+  const ids = [...new Set(rows.map((r) => r.userId).filter((x): x is string => !!x))];
+  const users = ids.length ? await db.user.findMany({ where: { id: { in: ids } }, select: { id: true, fullName: true } }) : [];
+  const name = new Map(users.map((u) => [u.id, u.fullName]));
+  return rows.map((r) => ({
+    id: r.id, kind: r.activityType, body: r.description, statusTo: r.statusTo,
+    createdAt: r.createdAt.toISOString(), createdByName: r.userId ? name.get(r.userId) ?? null : null,
+  }));
 }
 
 export interface InstallationPage {
